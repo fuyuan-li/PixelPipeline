@@ -15,7 +15,7 @@ definition:
         - from: "context:project_id"
           as: "project_id"
       toolset:
-        - tool_name: create_merge_request_note
+        - tool_name: "create_merge_request_note"
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
