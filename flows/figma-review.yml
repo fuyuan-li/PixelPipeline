@@ -10,12 +10,11 @@ definition:
       type: AgentComponent
       prompt_id: "orchestrator_prompt"
       inputs:
-        - from: "context:goal"
-          as: "goal"
-        - from: "context:project_id"
-          as: "project_id"
+        - "context:goal"
+        - "context:project_id"
+        - "context:merge_request_iid"
       toolset:
-        - tool_name: "create_merge_request_note"
+        - create_merge_request_note
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
@@ -29,22 +28,24 @@ definition:
 
           You are triggered when a designer submits a design update via the Figma plugin.
           The plugin creates a merge request with a Figma JSON export committed as a file,
-          and mentions you in the MR to kick off review.
+          and mentions you in the MR description to kick off review.
 
           Your task right now:
-          Post a comment on this merge request acknowledging receipt.
+          Acknowledge receipt of the review request by posting a comment on this merge request.
 
-          The project_id and merge_request_iid are provided to you directly.
-          Do NOT ask the user for any information.
+          You have the following information available:
+          - Project ID: {{project_id}}
+          - Merge Request IID: {{merge_request_iid}}
 
-          Call create_merge_request_note with:
+          Use the create_merge_request_note tool to post this exact message on the merge request:
+          "✅ task received"
+
+          Call the tool with:
           - project_id: {{project_id}}
-          - merge_request_iid: from the triggering mention context
+          - merge_request_iid: {{merge_request_iid}}
           - body: "✅ task received"
         user: |
           {{goal}}
-
-          project_id: {{project_id}}
         placeholder: history
       unit_primitives: []
       params:
