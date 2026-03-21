@@ -25,7 +25,7 @@ components:
 
     # Tools this agent is allowed to use.
     toolsets:
-      - create_note   # post a comment on the MR
+      - create_merge_request_note   # post a comment on the MR
 
 # ── Routing ──────────────────────────────────────────────────────────────────
 # Linear for now: START → orchestrator → END
@@ -59,7 +59,7 @@ prompts:
         Your comment must be exactly:
         "✅ task received"
 
-        Use the create_note tool to post this comment on the merge request.
+        Use the create_merge_request_note tool to post this comment on the merge request.
         Do not do anything else.
 
     model:

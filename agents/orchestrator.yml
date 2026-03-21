@@ -19,6 +19,6 @@ system_prompt: |
 
   "✅ task received"
 
-  Use the create_note tool to post this comment. Nothing else is needed at this stage.
+  Use the create_merge_request_note tool to post this comment. Nothing else is needed at this stage.
 tools:
-  - create_note
+  - create_merge_request_note
