@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-size: 12px;
+    color: #1a1a1a;
+    background: #fff;
+    padding: 16px;
+  }
+
+  h2 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  label {
+    display: block;
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 4px;
+    margin-top: 10px;
+  }
+  label:first-of-type { margin-top: 0; }
+
+  input[type="text"],
+  input[type="url"],
+  input[type="password"] {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #1a1a1a;
+    outline: none;
+    transition: border-color 0.15s;
+    font-family: inherit;
+  }
+  input:focus { border-color: #18a0fb; box-shadow: 0 0 0 2px rgba(24,160,251,0.15); }
+
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: #888;
+    cursor: pointer;
+    user-select: none;
+  }
+  .checkbox-row input { width: auto; cursor: pointer; }
+
+  hr {
+    border: none;
+    border-top: 1px solid #f0f0f0;
+    margin: 14px 0;
+  }
+
+  button#createBtn {
+    width: 100%;
+    padding: 9px;
+    background: #18a0fb;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 14px;
+    transition: background 0.15s;
+    letter-spacing: 0.02em;
+  }
+  button#createBtn:hover:not(:disabled) { background: #0d8de3; }
+  button#createBtn:disabled { background: #a8d8fb; cursor: not-allowed; }
+
+  #status {
+    margin-top: 10px;
+    font-size: 11px;
+    color: #888;
+    min-height: 18px;
+    line-height: 1.6;
+    word-break: break-word;
+  }
+  #status.success { color: #1a7f37; }
+  #status.error   { color: #cf222e; }
+
+  .hint {
+    font-size: 10px;
+    color: #aaa;
+    margin-top: 3px;
+  }
+
+  a { color: #18a0fb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<h2>⬡ Figma → GitLab MR</h2>
+
+<label>GitLab Base URL</label>
+<input type="url" id="gitlabBaseUrl" placeholder="https://gitlab.com" />
+
+<label>Project Path</label>
+<input type="text" id="projectPath" placeholder="namespace/project-name" />
+
+<label>Base Branch</label>
+<input type="text" id="baseBranch" placeholder="main" />
+
+<label>Design System URL <span style="color:#bbb">(optional)</span></label>
+<input type="url" id="designSystemUrl" placeholder="https://www.figma.com/design/..." />
+
+<label>Flow Service Account</label>
+<input type="text" id="flowAccount" placeholder="flow-bot" />
+<div class="hint">Will be @mentioned in the MR description to trigger the multi-agent review.</div>
+
+<hr>
+
+<label>GitLab Personal Access Token</label>
+<input type="password" id="token" placeholder="glpat-xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+<div class="hint">Needs <code>api</code> scope. Never stored in source code.</div>
+
+<label class="checkbox-row">
+  <input type="checkbox" id="rememberToken">
+  Remember token (saved in Figma's local storage on this machine)
+</label>
+
+<button id="createBtn" onclick="createMR()">🚀 Create MR</button>
+
+<div id="status"></div>
+
+<script>
+  // ─── helpers ─────────────────────────────────────────────────────────────────
+
+  function setStatus(text, cls) {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.className = cls || '';
+  }
+
+  function setStatusHTML(html, cls) {
+    const el = document.getElementById('status');
+    el.innerHTML = html;
+    el.className = cls || '';
+  }
+
+  function setDisabled(on) {
+    document.getElementById('createBtn').disabled = on;
+  }
+
+  function getValues() {
+    return {
+      gitlabBaseUrl:   document.getElementById('gitlabBaseUrl').value.trim().replace(/\/$/, ''),
+      projectPath:     document.getElementById('projectPath').value.trim(),
+      baseBranch:      document.getElementById('baseBranch').value.trim() || 'main',
+      designSystemUrl: document.getElementById('designSystemUrl').value.trim(),
+      flowAccount:     document.getElementById('flowAccount').value.trim().replace(/^@/, ''),
+      token:           document.getElementById('token').value.trim(),
+      rememberToken:   document.getElementById('rememberToken').checked,
+    };
+  }
+
+  // ─── receive messages from code.js ───────────────────────────────────────────
+
+  window.onmessage = (event) => {
+    const msg = event.data.pluginMessage;
+    if (!msg) return;
+
+    if (msg.type === 'init') {
+      const s = msg.settings;
+      document.getElementById('gitlabBaseUrl').value   = s.gitlabBaseUrl;
+      document.getElementById('projectPath').value     = s.projectPath;
+      document.getElementById('baseBranch').value      = s.baseBranch;
+      document.getElementById('designSystemUrl').value = s.designSystemUrl;
+      document.getElementById('flowAccount').value     = s.flowAccount;
+      if (s.token) {
+        document.getElementById('token').value         = s.token;
+        document.getElementById('rememberToken').checked = true;
+      }
+    }
+
+    if (msg.type === 'figma-export') {
+      // Figma data is ready — proceed with GitLab API calls
+      runGitLabFlow(msg.payload);
+    }
+
+    if (msg.type === 'export-error') {
+      setStatus('❌ Export failed: ' + msg.message, 'error');
+      setDisabled(false);
+    }
+  };
+
+  // ─── main entry point ────────────────────────────────────────────────────────
+
+  function createMR() {
+    const v = getValues();
+
+    if (!v.token)       { setStatus('❌ Token is required.', 'error'); return; }
+    if (!v.projectPath) { setStatus('❌ Project path is required (e.g. group/repo).', 'error'); return; }
+
+    setDisabled(true);
+    setStatus('Exporting Figma data…');
+
+    // Persist settings (token only if checkbox is on)
+    parent.postMessage({ pluginMessage: { type: 'save-settings', settings: v } }, '*');
+
+    // Ask code.js to serialize the current Figma selection / page
+    parent.postMessage({
+      pluginMessage: { type: 'get-figma-export', designSystemUrl: v.designSystemUrl }
+    }, '*');
+    // runGitLabFlow() is called when we receive the 'figma-export' reply
+  }
+
+  // ─── GitLab API flow ─────────────────────────────────────────────────────────
+  //
+  // Steps:
+  //   1. Resolve project → get numeric project ID
+  //   2. Create a short-lived review branch off baseBranch
+  //   3. Commit the Figma JSON to that branch
+  //   4. Open an MR and @mention the Flow service account
+
+  async function runGitLabFlow(figmaPayload) {
+    const v   = getValues();
+    const api = `${v.gitlabBaseUrl}/api/v4`;
+    const h   = { 'Content-Type': 'application/json', 'PRIVATE-TOKEN': v.token };
+
+    try {
+      // 1 ── Resolve project
+      setStatus('🔍 Resolving project…');
+      const projRes = await fetch(`${api}/projects/${encodeURIComponent(v.projectPath)}`, { headers: h });
+      if (!projRes.ok) {
+        const e = await projRes.json().catch(() => ({}));
+        throw new Error(`Project not found: ${e.message || projRes.status}`);
+      }
+      const project = await projRes.json();
+
+      // 2 ── Create review branch
+      const ts           = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15); // 20240312T143022
+      const reviewBranch = `figma/review-${ts}`;
+
+      setStatus('🌿 Creating branch…');
+      const branchRes = await fetch(`${api}/projects/${project.id}/repository/branches`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({ branch: reviewBranch, ref: v.baseBranch }),
+      });
+      if (!branchRes.ok) {
+        const e = await branchRes.json().catch(() => ({}));
+        throw new Error(`Branch creation failed: ${e.message || branchRes.status}`);
+      }
+
+      // 3 ── Commit the Figma JSON
+      const fileName       = `figma-exports/${ts}.json`;
+      const encodedFile    = encodeURIComponent(fileName);
+      const commitMessage  = [
+        'chore: add Figma design snapshot for review',
+        '',
+        `Page: ${figmaPayload.document?.pageName || '—'}`,
+        figmaPayload.designSystemUrl ? `Design System: ${figmaPayload.designSystemUrl}` : '',
+      ].filter(Boolean).join('\n');
+
+      setStatus('📄 Committing Figma export…');
+      const fileRes = await fetch(`${api}/projects/${project.id}/repository/files/${encodedFile}`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          branch:         reviewBranch,
+          content:        JSON.stringify(figmaPayload, null, 2),
+          commit_message: commitMessage,
+          encoding:       'text',
+        }),
+      });
+      if (!fileRes.ok) {
+        const e = await fileRes.json().catch(() => ({}));
+        throw new Error(`File commit failed: ${e.message || fileRes.status}`);
+      }
+
+      // 4 ── Create the MR
+      const pageName = figmaPayload.document?.pageName || 'Design';
+      const mention  = v.flowAccount ? `@${v.flowAccount}` : null;
+
+      const description = [
+        '## Figma Design Review',
+        '',
+        '> This MR was created automatically by the Figma plugin.',
+        '',
+        `| | |`,
+        `|---|---|`,
+        `| **Page** | ${pageName} |`,
+        `| **Exported at** | ${figmaPayload.exportedAt} |`,
+        figmaPayload.designSystemUrl
+          ? `| **Design System** | ${figmaPayload.designSystemUrl} |`
+          : null,
+        `| **Snapshot** | \`${fileName}\` |`,
+        '',
+        mention
+          ? `---\n\n${mention} please review this design update and leave your assessment as a comment on this MR.`
+          : '',
+      ].filter((l) => l !== null).join('\n');
+
+      setStatus('📬 Creating MR…');
+      const mrRes = await fetch(`${api}/projects/${project.id}/merge_requests`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          source_branch: reviewBranch,
+          target_branch: v.baseBranch,
+          title:         `[Figma Review] ${pageName} (${ts})`,
+          description,
+          labels:        'design-review',
+          remove_source_branch: true,
+        }),
+      });
+      if (!mrRes.ok) {
+        const e = await mrRes.json().catch(() => ({}));
+        throw new Error(`MR creation failed: ${e.message || mrRes.status}`);
+      }
+      const mr = await mrRes.json();
+
+      setStatusHTML(
+        `✅ MR created! <a href="${mr.web_url}" target="_blank">View !${mr.iid} ↗</a>`,
+        'success'
+      );
+
+    } catch (err) {
+      setStatus('❌ ' + err.message, 'error');
+    }
+
+    setDisabled(false);
+  }
+</script>
+</body>
+</html>

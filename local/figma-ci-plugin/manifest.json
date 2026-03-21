@@ -1,0 +1,12 @@
+{
+  "name": "Figma → GitLab MR",
+  "id": "figma-gitlab-mr",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Calls GitLab REST API to create branches, commit files, and open MRs. Domain is user-configurable to support both gitlab.com and self-hosted instances."
+  }
+}

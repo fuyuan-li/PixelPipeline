@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+.env.local
+.env*.local
+
+# Build output
+dist/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+.claude/
+
+# Notes
+notes.txt
+
+# Logs
+*.log
+npm-debug.log*
+
+# Secrets / credentials
+*.pem
+*.key
+secrets.yml
