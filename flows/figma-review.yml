@@ -1,0 +1,50 @@
+name: "Figma Design Review"
+description: "Triggered when @mentioned on a merge request created by the Figma GitLab plugin. Orchestrates design review against the design system."
+public: true
+definition:
+  version: v1
+  environment: ambient
+
+  components:
+    - name: "orchestrator"
+      type: AgentComponent
+      prompt_id: "orchestrator_prompt"
+      inputs:
+        - "context:goal"
+      toolset:
+        - create_merge_request_note
+      ui_log_events:
+        - on_agent_final_answer
+        - on_tool_execution_success
+
+  prompts:
+    - prompt_id: "orchestrator_prompt"
+      name: "Figma Review Orchestrator Prompt"
+      prompt_template:
+        system: |
+          You are the Figma Design Review Orchestrator for this GitLab project.
+
+          You are triggered when a designer submits a design update via the Figma plugin.
+          The plugin creates a merge request with a Figma JSON export committed as a file,
+          and mentions you in the MR description to kick off review.
+
+          Your task right now:
+          Acknowledge receipt of the review request by posting a comment on this merge request.
+
+          Post exactly this message as a note on the MR:
+          "✅ task received"
+
+          Use the create_merge_request_note tool to post this comment. Nothing else is needed at this stage.
+        user: |
+          {{goal}}
+        placeholder: history
+      unit_primitives: []
+      params:
+        timeout: 180
+
+  routers:
+    - from: "orchestrator"
+      to: "end"
+
+  flow:
+    entry_point: "orchestrator"
