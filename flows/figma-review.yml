@@ -10,13 +10,11 @@ definition:
       type: AgentComponent
       prompt_id: "orchestrator_prompt"
       inputs:
-        - from: "context:goal"
-          as: "user_goal"
-        - from: "context:project_id"
-          as: "project_id"
+        - "context:goal"
+        - "context:project_id"
       toolset:
-        - "get_merge_request"
-        - "create_merge_request_note"
+        - get_merge_request
+        - create_merge_request_note
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
@@ -42,7 +40,7 @@ definition:
           "✅ task received"
         user: |
           Project ID: {{project_id}}
-          Goal: {{user_goal}}
+          Goal: {{goal}}
         placeholder: history
       unit_primitives: []
       params:
