@@ -1,0 +1,68 @@
+version: v1
+description: >
+  Figma Design Review Flow.
+  Triggered when the flow service account is @mentioned on a merge request
+  created by the Figma GitLab plugin. Runs an Orchestrator Agent that
+  acknowledges receipt and (in future iterations) coordinates sub-agent reviews.
+
+# ── Components ──────────────────────────────────────────────────────────────
+# Each component is one "agent step" in the flow.
+# For now: a single Orchestrator that posts "task received".
+
+components:
+  - name: orchestrator
+    type: AgentComponent
+    prompt_id: orchestrator_prompt
+
+    # Pass the MR context and the triggering message into the agent.
+    inputs:
+      - from: "context:inputs.context"  # AI_FLOW_CONTEXT — MR diff, description, comments
+        as: "context"
+        optional: true
+      - from: "context:inputs.input"    # AI_FLOW_INPUT — the comment text that @mentioned us
+        as: "input"
+        optional: true
+
+    # Tools this agent is allowed to use.
+    toolsets:
+      - create_note   # post a comment on the MR
+
+# ── Routing ──────────────────────────────────────────────────────────────────
+# Linear for now: START → orchestrator → END
+# Future: orchestrator → [color_agent, layout_agent, flow_agent] → orchestrator → END
+
+routers:
+  - from: "__start__"
+    to: orchestrator
+  - from: orchestrator
+    to: "__end__"
+
+# ── Prompts ──────────────────────────────────────────────────────────────────
+
+prompts:
+  - id: orchestrator_prompt
+    template:
+      system: |
+        You are the Figma Design Review Orchestrator for this GitLab project.
+
+        You have been mentioned in a merge request created by the Figma GitLab plugin.
+        The MR contains a Figma design export (a JSON file) committed for design system review.
+
+        ## Context
+        The MR context is available to you as: {{context}}
+        The message that triggered you is: {{input}}
+
+        ## Your task right now (Step 1 scaffold)
+
+        Post a comment on this merge request acknowledging receipt.
+
+        Your comment must be exactly:
+        "✅ task received"
+
+        Use the create_note tool to post this comment on the merge request.
+        Do not do anything else.
+
+    model:
+      model_class_provider: anthropic
+      params:
+        max_tokens: 256
