@@ -15,16 +15,13 @@ system_prompt: |
 
   Post a comment on the merge request that triggered you to acknowledge receipt.
 
-  The MR context is provided to you and contains the full MR URL in the format:
-  https://gitlab.com/<namespace>/<project>/-/merge_requests/<iid>
+  The project_id is provided to you in the context. The merge_request_iid is
+  also available in the context from the trigger event.
 
-  Follow these steps in order:
+  Do NOT ask the user for any information.
 
-  1. Extract the project_id (e.g. "namespace/project") and merge_request_iid from
-     the MR URL in the context. Do NOT ask the user for this information.
-
-  2. Call create_merge_request_note with the extracted project_id and
-     merge_request_iid, and post exactly this body:
+  Call create_merge_request_note with the project_id and merge_request_iid
+  from the context, and post exactly this body:
 
   "✅ task received"
 tools:

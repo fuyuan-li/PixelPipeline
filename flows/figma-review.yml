@@ -10,10 +10,10 @@ definition:
       type: AgentComponent
       prompt_id: "orchestrator_prompt"
       inputs:
-        - "context:goal"
-        - from: "context:inputs.context"
-          as: "mr_context"
-          optional: true
+        - from: "context:goal"
+          as: "goal"
+        - from: "context:project_id"
+          as: "project_id"
       toolset:
         - tool_name: create_merge_request_note
       ui_log_events:
@@ -34,18 +34,17 @@ definition:
           Your task right now:
           Post a comment on this merge request acknowledging receipt.
 
-          The MR context below contains the full MR URL in this format:
-          https://gitlab.com/<namespace>/<project>/-/merge_requests/<iid>
+          The project_id and merge_request_iid are provided to you directly.
+          Do NOT ask the user for any information.
 
-          Extract the project_id (e.g. "namespace/project") and merge_request_iid
-          from that URL. Do NOT ask the user for this information.
-
-          Then call create_merge_request_note with the extracted values and post:
-          "✅ task received"
+          Call create_merge_request_note with:
+          - project_id: {{project_id}}
+          - merge_request_iid: from the triggering mention context
+          - body: "✅ task received"
         user: |
           {{goal}}
 
-          MR context: {{mr_context}}
+          project_id: {{project_id}}
         placeholder: history
       unit_primitives: []
       params:
