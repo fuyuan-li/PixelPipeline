@@ -81,6 +81,14 @@ figma.ui.onmessage = async (msg) => {
 
 // Recursively serialize a Figma node to a plain JSON-safe object.
 // We capture layout, visual, and text properties that are useful for review.
+
+// Some Figma properties return figma.mixed (a Symbol) when values differ across
+// child nodes. Symbols can't be sent via postMessage, so we replace them with
+// the string "mixed" to keep the data informative but serializable.
+function safe(val) {
+  return (typeof val === 'symbol') ? 'mixed' : val;
+}
+
 function serializeNode(node) {
   const out = {
     id:   node.id,
@@ -93,32 +101,32 @@ function serializeNode(node) {
   if ('width' in node)   out.width   = Math.round(node.width);
   if ('height' in node)  out.height  = Math.round(node.height);
   if ('visible' in node) out.visible = node.visible;
-  if ('opacity' in node) out.opacity = node.opacity;
+  if ('opacity' in node) out.opacity = safe(node.opacity);
 
-  if ('fills' in node)         out.fills         = node.fills;
-  if ('strokes' in node)       out.strokes       = node.strokes;
-  if ('effects' in node)       out.effects       = node.effects;
-  if ('cornerRadius' in node)  out.cornerRadius  = node.cornerRadius;
+  if ('fills' in node)        out.fills        = safe(node.fills);
+  if ('strokes' in node)      out.strokes      = safe(node.strokes);
+  if ('effects' in node)      out.effects      = safe(node.effects);
+  if ('cornerRadius' in node) out.cornerRadius = safe(node.cornerRadius);
 
   if ('layoutMode' in node) {
-    out.layoutMode             = node.layoutMode;
-    out.primaryAxisSizingMode  = node.primaryAxisSizingMode;
-    out.counterAxisSizingMode  = node.counterAxisSizingMode;
-    out.itemSpacing            = node.itemSpacing;
+    out.layoutMode            = node.layoutMode;
+    out.primaryAxisSizingMode = node.primaryAxisSizingMode;
+    out.counterAxisSizingMode = node.counterAxisSizingMode;
+    out.itemSpacing           = safe(node.itemSpacing);
     out.padding = {
-      top:    node.paddingTop,
-      right:  node.paddingRight,
-      bottom: node.paddingBottom,
-      left:   node.paddingLeft,
+      top:    safe(node.paddingTop),
+      right:  safe(node.paddingRight),
+      bottom: safe(node.paddingBottom),
+      left:   safe(node.paddingLeft),
     };
   }
 
   if (node.type === 'TEXT') {
     out.characters          = node.characters;
-    out.fontSize            = node.fontSize;
-    out.fontName            = node.fontName;
-    out.textAlignHorizontal = node.textAlignHorizontal;
-    out.textAlignVertical   = node.textAlignVertical;
+    out.fontSize            = safe(node.fontSize);
+    out.fontName            = safe(node.fontName);
+    out.textAlignHorizontal = safe(node.textAlignHorizontal);
+    out.textAlignVertical   = safe(node.textAlignVertical);
   }
 
   if ('children' in node) {
