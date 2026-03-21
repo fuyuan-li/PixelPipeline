@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "agents": {
+    "agents/orchestrator.yml": {
+      "catalog_id": "gid://gitlab/Ai::Catalog::Item/1005841",
+      "name": "Figma Review Orchestrator",
+      "created_at": "2026-03-21T07:04:06.810Z",
+      "item_consumers": {
+        "group": {
+          "id": "gid://gitlab/Ai::Catalog::ItemConsumer/5582921"
+        },
+        "project": {
+          "id": "gid://gitlab/Ai::Catalog::ItemConsumer/5582922"
+        }
+      },
+      "latest_sync": {
+        "git_tag": "v0.1.0",
+        "catalog_version": "1.0.0",
+        "synced_at": "2026-03-21T07:04:06.810Z",
+        "definition_hash": "ec8ec812b036de78"
+      }
+    }
+  },
+  "flows": {
+    "flows/figma-review.yml": {
+      "catalog_id": "gid://gitlab/Ai::Catalog::Item/1005842",
+      "name": "Figma Design Review",
+      "created_at": "2026-03-21T07:04:07.643Z",
+      "item_consumers": {
+        "group": {
+          "id": "gid://gitlab/Ai::Catalog::ItemConsumer/5582923"
+        },
+        "project": {
+          "id": "gid://gitlab/Ai::Catalog::ItemConsumer/5582924"
+        }
+      },
+      "latest_sync": {
+        "git_tag": "v0.1.0",
+        "catalog_version": "1.0.0",
+        "synced_at": "2026-03-21T07:04:07.643Z",
+        "definition_hash": "329987e5a0e84be3"
+      }
+    }
+  }
+}
