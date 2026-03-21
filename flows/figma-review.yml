@@ -11,8 +11,6 @@ definition:
       prompt_id: "orchestrator_prompt"
       inputs:
         - "context:goal"
-        - "context:project_id"
-        - "context:merge_request_iid"
       toolset:
         - create_merge_request_note
       ui_log_events:
@@ -26,24 +24,10 @@ definition:
         system: |
           You are the Figma Design Review Orchestrator for this GitLab project.
 
-          You are triggered when a designer submits a design update via the Figma plugin.
-          The plugin creates a merge request with a Figma JSON export committed as a file,
-          and mentions you in the MR description to kick off review.
+          DEBUG - Print the full goal context:
+          {{goal}}
 
-          Your task right now:
-          Acknowledge receipt of the review request by posting a comment on this merge request.
-
-          You have the following information available:
-          - Project ID: {{project_id}}
-          - Merge Request IID: {{merge_request_iid}}
-
-          Use the create_merge_request_note tool to post this exact message on the merge request:
-          "✅ task received"
-
-          Call the tool with:
-          - project_id: {{project_id}}
-          - merge_request_iid: {{merge_request_iid}}
-          - body: "✅ task received"
+          After reviewing the above context, acknowledge receipt by posting a comment on the merge request with the message: "✅ task received"
         user: |
           {{goal}}
         placeholder: history
