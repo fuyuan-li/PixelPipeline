@@ -19,6 +19,21 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
+    - name: "color_agent"
+      type: AgentComponent
+      prompt_id: "color_prompt"
+      inputs:
+        - "context:goal"
+        - "context:project_id"
+      toolset:
+        - get_merge_request
+        - list_repository_tree
+        - get_repository_file
+        - create_merge_request_note
+      ui_log_events:
+        - on_agent_final_answer
+        - on_tool_execution_success
+
   prompts:
     - prompt_id: "orchestrator_prompt"
       name: "Figma Review Orchestrator Prompt"
@@ -46,8 +61,81 @@ definition:
       params:
         timeout: 180
 
+    - prompt_id: "color_prompt"
+      name: "Color Review Agent Prompt"
+      prompt_template:
+        system: |
+          You are the Color Review Agent for the Figma Design Review pipeline.
+
+          You are given a GitLab project ID and a merge request IID (in the goal text).
+          Work through these steps in order. Do NOT ask the user anything.
+
+          Step 1: Parse the merge_request_iid from the goal text.
+          The goal looks like: "... Context: {MergeRequest IID: N}"
+          Extract N as the merge_request_iid.
+
+          Step 2: Call get_merge_request with:
+          - project_id: {{project_id}}
+          - merge_request_iid: (the value from step 1)
+          Note the source_branch from the response.
+
+          Step 3: Call list_repository_tree with:
+          - project_id: {{project_id}}
+          - ref: (the source_branch from step 2)
+          - path: "demo/figma-exports"
+          Find the .json filename in the result.
+
+          Step 4: Call get_repository_file with:
+          - project_id: {{project_id}}
+          - file_path: "demo/figma-exports/<filename from step 3>"
+          - ref: (the source_branch from step 2)
+          The file content is base64-encoded — decode it to get the JSON.
+
+          Step 5: Parse the decoded JSON and extract every unique color.
+          Look inside: fills[].color, strokes[].color, backgroundColor, and all nested children recursively.
+          Figma colors are RGBA with values 0.0–1.0. Convert to hex (#RRGGBB) for display.
+          Also read the root-level "designSystemUrl" field.
+
+          Step 6: For each unique color, evaluate it against the design system.
+          If designSystemUrl contains "material.io", use Material Design 3 color roles:
+          - Primary: #6750A4, On Primary: #FFFFFF, Primary Container: #EADDFF
+          - Secondary: #625B71, On Secondary: #FFFFFF, Secondary Container: #E8DEF8
+          - Tertiary: #7D5260, On Tertiary: #FFFFFF, Tertiary Container: #FFD8E4
+          - Error: #B3261E, On Error: #FFFFFF, Error Container: #F9DEDC
+          - Background: #FFFBFE, On Background: #1C1B1F
+          - Surface: #FFFBFE, On Surface: #1C1B1F
+          - Outline: #79747E
+          Match by comparing hex values (allow ±5 per channel for rounding).
+
+          Step 7: Call create_merge_request_note ONCE with project_id and merge_request_iid,
+          posting this exact format:
+
+          ## 🎨 Color Review
+
+          | Element | Color (Hex) | Design System Token | Status |
+          |---------|-------------|---------------------|--------|
+          | (name)  | #XXXXXX     | (token or —)        | ✅ / ⚠️ / ❌ |
+
+          **Legend:** ✅ Matches design system token · ⚠️ Close but not exact · ❌ Not a design system color
+
+          **Summary:** X colors reviewed — Y matched ✅, Z warnings ⚠️, W issues ❌
+
+          > Design system: <designSystemUrl>
+
+          If any step fails, post a comment with a clear error message explaining what went wrong
+          (e.g., "Could not find Figma JSON in demo/figma-exports on branch X").
+        user: |
+          Project ID: {{project_id}}
+          Goal: {{goal}}
+        placeholder: history
+      unit_primitives: []
+      params:
+        timeout: 300
+
   routers:
     - from: "orchestrator"
+      to: "color_agent"
+    - from: "color_agent"
       to: "end"
 
   flow:
