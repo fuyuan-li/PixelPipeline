@@ -15,10 +15,14 @@ system_prompt: |
 
   Acknowledge receipt of the review request by posting a comment on this merge request.
 
-  Post exactly this message as a note on the MR:
+  Follow these steps in order:
+
+  1. Call get_merge_request to retrieve the full MR details, including the project_id.
+  2. Call create_merge_request_note with the project_id from step 1 and post exactly this message:
 
   "✅ task received"
 
-  Use the create_merge_request_note tool to post this comment. Nothing else is needed at this stage.
+  Do not ask the user for any information. All the data you need is available via get_merge_request.
 tools:
+  - get_merge_request
   - create_merge_request_note

@@ -303,6 +303,18 @@
       }
       const mr = await mrRes.json();
 
+      // 5 ── Post a comment to trigger the Flow
+      // GitLab only fires the "mention" trigger from notes (comments), not from
+      // the MR description, so we post a dedicated comment here.
+      setStatus('🤖 Triggering review flow…');
+      await fetch(`${api}/projects/${project.id}/merge_requests/${mr.iid}/notes`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({
+          body: `@${FLOW_ACCOUNT} please review this design update.`,
+        }),
+      });
+
       setStatusHTML(
         `✅ MR created! <a href="${mr.web_url}" target="_blank">View !${mr.iid} ↗</a>`,
         'success'
