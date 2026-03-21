@@ -3,37 +3,31 @@
 // This file handles: showing the UI, reading Figma data, and persisting settings
 // to Figma's local clientStorage (never to the source code).
 
-figma.showUI(__html__, { width: 440, height: 590 });
+figma.showUI(__html__, { width: 440, height: 430 });
 
 // On startup, load saved settings from Figma's local storage and send to UI.
-// The token is optionally saved here too — it lives in Figma's app storage on
-// the user's machine, NOT in any source file.
+// gitlabBaseUrl and flowAccount are hardcoded constants — not stored here.
+// The token is optionally saved if the user checks "Remember token".
 async function init() {
   const [
-    gitlabBaseUrl,
     projectPath,
     baseBranch,
     designSystemUrl,
-    flowAccount,
     token,
   ] = await Promise.all([
-    figma.clientStorage.getAsync('gitlabBaseUrl'),
     figma.clientStorage.getAsync('projectPath'),
     figma.clientStorage.getAsync('baseBranch'),
     figma.clientStorage.getAsync('designSystemUrl'),
-    figma.clientStorage.getAsync('flowAccount'),
     figma.clientStorage.getAsync('token'),
   ]);
 
   figma.ui.postMessage({
     type: 'init',
     settings: {
-      gitlabBaseUrl: gitlabBaseUrl || 'https://gitlab.com',
-      projectPath:   projectPath   || '',
-      baseBranch:    baseBranch    || 'main',
+      projectPath:     projectPath     || '',
+      baseBranch:      baseBranch      || 'main',
       designSystemUrl: designSystemUrl || '',
-      flowAccount:   flowAccount   || '',
-      token:         token         || '',
+      token:           token           || '',
     },
   });
 }
@@ -45,11 +39,9 @@ figma.ui.onmessage = async (msg) => {
   // Persist non-sensitive settings; token only saved if user opts in.
   if (msg.type === 'save-settings') {
     const s = msg.settings;
-    await figma.clientStorage.setAsync('gitlabBaseUrl',    s.gitlabBaseUrl);
     await figma.clientStorage.setAsync('projectPath',      s.projectPath);
     await figma.clientStorage.setAsync('baseBranch',       s.baseBranch);
     await figma.clientStorage.setAsync('designSystemUrl',  s.designSystemUrl);
-    await figma.clientStorage.setAsync('flowAccount',      s.flowAccount);
 
     if (s.rememberToken && s.token) {
       await figma.clientStorage.setAsync('token', s.token);

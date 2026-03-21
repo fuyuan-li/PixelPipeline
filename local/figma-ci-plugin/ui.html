@@ -45,6 +45,7 @@
     font-family: inherit;
   }
   input:focus { border-color: #18a0fb; box-shadow: 0 0 0 2px rgba(24,160,251,0.15); }
+  input.error  { border-color: #cf222e; }
 
   .checkbox-row {
     display: flex;
@@ -106,21 +107,14 @@
 
 <h2>⬡ Figma → GitLab MR</h2>
 
-<label>GitLab Base URL</label>
-<input type="url" id="gitlabBaseUrl" placeholder="https://gitlab.com" />
-
 <label>Project Path</label>
 <input type="text" id="projectPath" placeholder="namespace/project-name" />
 
 <label>Base Branch</label>
 <input type="text" id="baseBranch" placeholder="main" />
 
-<label>Design System URL <span style="color:#bbb">(optional)</span></label>
+<label>Design System URL</label>
 <input type="url" id="designSystemUrl" placeholder="https://www.figma.com/design/..." />
-
-<label>Flow Service Account</label>
-<input type="text" id="flowAccount" placeholder="flow-bot" />
-<div class="hint">GitLab auto-creates a service account when you enable the flow. Name format: <code>ai-figma-review-&lt;your-group&gt;</code>. Find it in Settings → Duo Agent Platform → Flows.</div>
 
 <hr>
 
@@ -138,6 +132,10 @@
 <div id="status"></div>
 
 <script>
+  // ─── constants (change here if infra changes) ─────────────────────────────
+  const GITLAB_BASE_URL = 'https://gitlab.com';
+  const FLOW_ACCOUNT    = 'ai-figma-design-review-gitlab-ai-hackathon';
+
   // ─── helpers ─────────────────────────────────────────────────────────────────
 
   function setStatus(text, cls) {
@@ -158,11 +156,9 @@
 
   function getValues() {
     return {
-      gitlabBaseUrl:   document.getElementById('gitlabBaseUrl').value.trim().replace(/\/$/, ''),
       projectPath:     document.getElementById('projectPath').value.trim(),
       baseBranch:      document.getElementById('baseBranch').value.trim() || 'main',
       designSystemUrl: document.getElementById('designSystemUrl').value.trim(),
-      flowAccount:     document.getElementById('flowAccount').value.trim().replace(/^@/, ''),
       token:           document.getElementById('token').value.trim(),
       rememberToken:   document.getElementById('rememberToken').checked,
     };
@@ -176,19 +172,16 @@
 
     if (msg.type === 'init') {
       const s = msg.settings;
-      document.getElementById('gitlabBaseUrl').value   = s.gitlabBaseUrl;
       document.getElementById('projectPath').value     = s.projectPath;
       document.getElementById('baseBranch').value      = s.baseBranch;
       document.getElementById('designSystemUrl').value = s.designSystemUrl;
-      document.getElementById('flowAccount').value     = s.flowAccount;
       if (s.token) {
-        document.getElementById('token').value         = s.token;
+        document.getElementById('token').value           = s.token;
         document.getElementById('rememberToken').checked = true;
       }
     }
 
     if (msg.type === 'figma-export') {
-      // Figma data is ready — proceed with GitLab API calls
       runGitLabFlow(msg.payload);
     }
 
@@ -203,33 +196,22 @@
   function createMR() {
     const v = getValues();
 
-    if (!v.token)       { setStatus('❌ Token is required.', 'error'); return; }
-    if (!v.projectPath) { setStatus('❌ Project path is required (e.g. group/repo).', 'error'); return; }
+    if (!v.token)           { setStatus('❌ Token is required.', 'error'); return; }
+    if (!v.projectPath)     { setStatus('❌ Project path is required (e.g. group/repo).', 'error'); return; }
+    if (!v.designSystemUrl) { setStatus('❌ Design System URL is required.', 'error'); return; }
 
     setDisabled(true);
     setStatus('Exporting Figma data…');
 
-    // Persist settings (token only if checkbox is on)
     parent.postMessage({ pluginMessage: { type: 'save-settings', settings: v } }, '*');
-
-    // Ask code.js to serialize the current Figma selection / page
-    parent.postMessage({
-      pluginMessage: { type: 'get-figma-export', designSystemUrl: v.designSystemUrl }
-    }, '*');
-    // runGitLabFlow() is called when we receive the 'figma-export' reply
+    parent.postMessage({ pluginMessage: { type: 'get-figma-export', designSystemUrl: v.designSystemUrl } }, '*');
   }
 
   // ─── GitLab API flow ─────────────────────────────────────────────────────────
-  //
-  // Steps:
-  //   1. Resolve project → get numeric project ID
-  //   2. Create a short-lived review branch off baseBranch
-  //   3. Commit the Figma JSON to that branch
-  //   4. Open an MR and @mention the Flow service account
 
   async function runGitLabFlow(figmaPayload) {
     const v   = getValues();
-    const api = `${v.gitlabBaseUrl}/api/v4`;
+    const api = `${GITLAB_BASE_URL}/api/v4`;
     const h   = { 'Content-Type': 'application/json', 'PRIVATE-TOKEN': v.token };
 
     try {
@@ -243,7 +225,7 @@
       const project = await projRes.json();
 
       // 2 ── Create review branch
-      const ts           = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15); // 20240312T143022
+      const ts           = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
       const reviewBranch = `figma/review-${ts}`;
 
       setStatus('🌿 Creating branch…');
@@ -258,14 +240,14 @@
       }
 
       // 3 ── Commit the Figma JSON
-      const fileName       = `figma-exports/${ts}.json`;
-      const encodedFile    = encodeURIComponent(fileName);
-      const commitMessage  = [
+      const fileName    = `demo/figma-exports/${ts}.json`;
+      const encodedFile = encodeURIComponent(fileName);
+      const commitMsg   = [
         'chore: add Figma design snapshot for review',
         '',
         `Page: ${figmaPayload.document?.pageName || '—'}`,
-        figmaPayload.designSystemUrl ? `Design System: ${figmaPayload.designSystemUrl}` : '',
-      ].filter(Boolean).join('\n');
+        `Design System: ${figmaPayload.designSystemUrl}`,
+      ].join('\n');
 
       setStatus('📄 Committing Figma export…');
       const fileRes = await fetch(`${api}/projects/${project.id}/repository/files/${encodedFile}`, {
@@ -274,7 +256,7 @@
         body: JSON.stringify({
           branch:         reviewBranch,
           content:        JSON.stringify(figmaPayload, null, 2),
-          commit_message: commitMessage,
+          commit_message: commitMsg,
           encoding:       'text',
         }),
       });
@@ -284,9 +266,7 @@
       }
 
       // 4 ── Create the MR
-      const pageName = figmaPayload.document?.pageName || 'Design';
-      const mention  = v.flowAccount ? `@${v.flowAccount}` : null;
-
+      const pageName    = figmaPayload.document?.pageName || 'Design';
       const description = [
         '## Figma Design Review',
         '',
@@ -296,26 +276,24 @@
         `|---|---|`,
         `| **Page** | ${pageName} |`,
         `| **Exported at** | ${figmaPayload.exportedAt} |`,
-        figmaPayload.designSystemUrl
-          ? `| **Design System** | ${figmaPayload.designSystemUrl} |`
-          : null,
+        `| **Design System** | ${figmaPayload.designSystemUrl} |`,
         `| **Snapshot** | \`${fileName}\` |`,
         '',
-        mention
-          ? `---\n\n${mention} please review this design update and leave your assessment as a comment on this MR.`
-          : '',
-      ].filter((l) => l !== null).join('\n');
+        `---`,
+        '',
+        `@${FLOW_ACCOUNT} please review this design update and leave your assessment as a comment on this MR.`,
+      ].join('\n');
 
       setStatus('📬 Creating MR…');
       const mrRes = await fetch(`${api}/projects/${project.id}/merge_requests`, {
         method: 'POST',
         headers: h,
         body: JSON.stringify({
-          source_branch: reviewBranch,
-          target_branch: v.baseBranch,
-          title:         `[Figma Review] ${pageName} (${ts})`,
+          source_branch:        reviewBranch,
+          target_branch:        v.baseBranch,
+          title:                `[Figma Review] ${pageName} (${ts})`,
           description,
-          labels:        'design-review',
+          labels:               'design-review',
           remove_source_branch: true,
         }),
       });
