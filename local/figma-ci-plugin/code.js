@@ -108,7 +108,7 @@ figma.ui.onmessage = async (msg) => {
       const node = figma.getNodeById(fix.node_id);
 
       if (!node) {
-        results.push({ ...fix, status: 'not_found' });
+        results.push(Object.assign({}, fix, { status: 'not_found' }));
         continue;
       }
 
@@ -119,38 +119,38 @@ figma.ui.onmessage = async (msg) => {
 
           const idx = typeof fix.fill_index === 'number' ? fix.fill_index : 0;
           if (!fills[idx]) {
-            results.push({ ...fix, status: 'fill_index_missing' });
+            results.push(Object.assign({}, fix, { status: 'fill_index_missing' }));
             continue;
           }
 
-          fills[idx] = { ...fills[idx], color: hexToFigmaRgb(fix.target_value) };
+          fills[idx] = Object.assign({}, fills[idx], { color: hexToFigmaRgb(fix.target_value) });
           node[prop] = fills;
-          results.push({ ...fix, status: 'applied' });
+          results.push(Object.assign({}, fix, { status: 'applied' }));
 
         } else if (fix.property === 'fontSize' && 'fontSize' in node) {
           node.fontSize = fix.target_value;
-          results.push({ ...fix, status: 'applied' });
+          results.push(Object.assign({}, fix, { status: 'applied' }));
 
         } else if (fix.property === 'itemSpacing' && 'itemSpacing' in node) {
           node.itemSpacing = fix.target_value;
-          results.push({ ...fix, status: 'applied' });
+          results.push(Object.assign({}, fix, { status: 'applied' }));
 
         } else if (fix.property.startsWith('padding.') && 'paddingTop' in node) {
           const side = fix.property.split('.')[1]; // top | right | bottom | left
           const map  = { top: 'paddingTop', right: 'paddingRight', bottom: 'paddingBottom', left: 'paddingLeft' };
           if (map[side]) {
             node[map[side]] = fix.target_value;
-            results.push({ ...fix, status: 'applied' });
+            results.push(Object.assign({}, fix, { status: 'applied' }));
           } else {
-            results.push({ ...fix, status: 'unsupported_property' });
+            results.push(Object.assign({}, fix, { status: 'unsupported_property' }));
           }
 
         } else {
-          results.push({ ...fix, status: 'unsupported_property' });
+          results.push(Object.assign({}, fix, { status: 'unsupported_property' }));
         }
 
       } catch (err) {
-        results.push({ ...fix, status: 'error', error: err.message });
+        results.push(Object.assign({}, fix, { status: 'error', error: err.message }));
       }
     }
 
