@@ -7,18 +7,14 @@ definition:
 
   components:
     - name: "orchestrator"
-      type: SupervisorComponent
+      type: AgentComponent
       prompt_id: "orchestrator_prompt"
       inputs:
         - "context:goal"
         - "context:project_id"
-      subagents:
-        - color_agent
-        - font_agent
       toolset:
-        - tool_name: get_merge_request
-        - tool_name: create_commit
-        - tool_name: create_merge_request_note
+        - get_merge_request
+        - create_merge_request_note
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
@@ -53,6 +49,20 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
+    - name: "aggregator"
+      type: AgentComponent
+      prompt_id: "aggregator_prompt"
+      inputs:
+        - "context:goal"
+        - "context:project_id"
+      toolset:
+        - get_merge_request
+        - create_commit
+        - create_merge_request_note
+      ui_log_events:
+        - on_agent_final_answer
+        - on_tool_execution_success
+
     - name: "summarizer"
       type: AgentComponent
       prompt_id: "summarizer_prompt"
@@ -83,7 +93,17 @@ definition:
         - on_agent_final_answer
 
   routers:
+    # fan-out
     - from: "orchestrator"
+      to: "color_agent"
+    - from: "orchestrator"
+      to: "font_agent"
+    # fan-in — system waits for both before entering aggregator
+    - from: "color_agent"
+      to: "aggregator"
+    - from: "font_agent"
+      to: "aggregator"
+    - from: "aggregator"
       to: "summarizer"
     - from: "summarizer"
       to: "fix_agent"
@@ -100,57 +120,22 @@ definition:
         system: |
           You are the Orchestrator for the Figma Design Review pipeline.
           You are triggered when a designer submits a design update via the Figma plugin.
-          You coordinate parallel review subagents and consolidate their findings
-          into a single commit on the source branch.
-
-          Your subagents are: color_agent and font_agent (more may be added in future).
-          Each subagent returns a structured JSON as their final answer.
-
-          ## Your responsibilities
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
-          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
+          Step 2: Call get_merge_request (project_id, merge_request_iid) to confirm the MR exists.
 
           Step 3: Call create_merge_request_note with project_id and merge_request_iid,
           posting exactly: "⏳ Design review started — running checks..."
 
-          Step 4: Dispatch color_agent and font_agent in parallel. Wait for both to complete.
-          - If a subagent errors or returns invalid JSON, treat it as an empty result
-            with summary { total_reviewed: 0, matched: 0, warnings: 0, errors: 0 } and fixes: [].
-          - Never abort the entire review because one subagent failed.
-
-          Step 5: Collect the JSON outputs from each subagent's final answer.
-          Each JSON will have a "review_type" field ("color" or "font").
-          Validate each is a proper JSON object; if not, substitute the empty result above.
-
-          Step 6: Call create_commit ONCE with:
-            project_id: {{project_id}}
-            branch: source_branch
-            commit_message: "chore: design review fix plans [skip ci]"
-            actions: one "create" action per valid subagent output, e.g.:
-              - { action: "create",
-                  file_path: "demo/fix-plans/color-fix-plan.json",
-                  content: <color agent JSON string> }
-              - { action: "create",
-                  file_path: "demo/fix-plans/font-fix-plan.json",
-                  content: <font agent JSON string> }
-          Only include a file if the corresponding subagent returned a result
-          (even an empty one). Skip a file entirely only if the subagent crashed
-          with no output whatsoever.
-
-          Step 7: If the commit fails, call create_merge_request_note with a brief
-          error message explaining which fix plans could not be saved.
-
-          Your final answer should be a short status summary, e.g.:
-          "Orchestrator complete. Committed fix plans: color, font."
+          That is all. Downstream agents will handle the analysis and commits.
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
         placeholder: history
       unit_primitives: []
       params:
-        timeout: 600
+        timeout: 60
 
     - prompt_id: "color_prompt"
       name: "Color Agent Prompt"
@@ -158,7 +143,7 @@ definition:
         system: |
           You are the Color Agent for the Figma Design Review pipeline.
           You analyse color usage in a Figma export and return a Color Fix Plan JSON
-          as your final answer. You do NOT commit files or post MR comments (except on error).
+          as your final answer. You do NOT commit files or post MR comments.
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
@@ -214,7 +199,7 @@ definition:
 
           Step 8: Output this JSON as your final answer. Do NOT call create_commit.
           If any step fails, output a JSON with an "error" field describing what went wrong.
-          The supervisor will handle notifying the team via MR comment.
+          The aggregator downstream will handle error notifications and commits.
           The error JSON format:
           {
             "generated_at": "<ISO timestamp>",
@@ -238,7 +223,7 @@ definition:
           You are the Font Agent for the Figma Design Review pipeline.
           You analyse typography usage (font family, font size, font weight, and text color)
           in a Figma export and return a Font Fix Plan JSON as your final answer.
-          You do NOT commit files or post MR comments (except on error).
+          You do NOT commit files or post MR comments.
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
@@ -303,7 +288,7 @@ definition:
 
           Step 8: Output this JSON as your final answer. Do NOT call create_commit.
           If any step fails, output a JSON with an "error" field describing what went wrong.
-          The supervisor will handle notifying the team via MR comment.
+          The aggregator downstream will handle error notifications and commits.
           The error JSON format:
           {
             "generated_at": "<ISO timestamp>",
@@ -319,6 +304,57 @@ definition:
       unit_primitives: []
       params:
         timeout: 300
+
+    - prompt_id: "aggregator_prompt"
+      name: "Aggregator Prompt"
+      prompt_template:
+        system: |
+          You are the Aggregator for the Figma Design Review pipeline.
+          color_agent and font_agent have already completed their analysis in parallel.
+          Their full JSON outputs are in the conversation history above.
+
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+
+          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
+
+          Step 3: From the conversation history above, locate:
+          - The JSON with "review_type": "color"  (output from color_agent)
+          - The JSON with "review_type": "font"   (output from font_agent)
+          If an agent's output is missing or not valid JSON, substitute an empty result:
+            { "review_type": "<type>", "generated_at": "<now>",
+              "summary": { "total_reviewed": 0, "matched": 0, "warnings": 0, "errors": 0 },
+              "fixes": [] }
+          Never abort because one agent's result was missing or errored.
+
+          Step 4: Call create_commit ONCE with:
+            project_id: {{project_id}}
+            branch: source_branch
+            commit_message: "chore: design review fix plans [skip ci]"
+            actions: one "create" action per agent result:
+              - { action: "create",
+                  file_path: "demo/fix-plans/color-fix-plan.json",
+                  content: <color JSON string> }
+              - { action: "create",
+                  file_path: "demo/fix-plans/font-fix-plan.json",
+                  content: <font JSON string> }
+          Include an entry for each review type even if its fixes array is empty.
+          Skip an entry only if the agent produced absolutely no output.
+
+          Step 5: If the commit fails, call create_merge_request_note with a brief
+          error message explaining which fix plans could not be saved.
+
+          Your final answer should be a short status summary, e.g.:
+          "Aggregator complete. Committed fix plans: color, font."
+        user: |
+          Project ID: {{project_id}}
+          Goal: {{goal}}
+
+          The color_agent and font_agent outputs are in the conversation history above.
+          Please collect both JSON outputs and commit them as described.
+        placeholder: history
+      unit_primitives: []
+      params:
+        timeout: 120
 
     - prompt_id: "summarizer_prompt"
       name: "Summarizer Prompt"
