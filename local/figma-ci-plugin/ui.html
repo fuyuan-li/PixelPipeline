@@ -10,18 +10,34 @@
     font-size: 12px;
     color: #1a1a1a;
     background: #fff;
-    padding: 16px;
   }
 
-  h2 {
-    font-size: 13px;
-    font-weight: 600;
-    margin-bottom: 14px;
+  /* ── Tabs ── */
+  .tabs {
     display: flex;
-    align-items: center;
-    gap: 6px;
+    border-bottom: 1px solid #e8e8e8;
+    background: #fafafa;
   }
+  .tab {
+    flex: 1;
+    padding: 10px 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    color: #999;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+    letter-spacing: 0.02em;
+  }
+  .tab.active { color: #18a0fb; border-bottom-color: #18a0fb; }
+  .tab:hover:not(.active) { color: #555; }
 
+  /* ── Panels ── */
+  .panel { display: none; padding: 16px; }
+  .panel.active { display: block; }
+
+  /* ── Form elements ── */
   label {
     display: block;
     font-size: 11px;
@@ -45,7 +61,6 @@
     font-family: inherit;
   }
   input:focus { border-color: #18a0fb; box-shadow: 0 0 0 2px rgba(24,160,251,0.15); }
-  input.error  { border-color: #cf222e; }
 
   .checkbox-row {
     display: flex;
@@ -59,17 +74,12 @@
   }
   .checkbox-row input { width: auto; cursor: pointer; }
 
-  hr {
-    border: none;
-    border-top: 1px solid #f0f0f0;
-    margin: 14px 0;
-  }
+  hr { border: none; border-top: 1px solid #f0f0f0; margin: 14px 0; }
 
-  button#createBtn {
+  /* ── Buttons ── */
+  .btn {
     width: 100%;
     padding: 9px;
-    background: #18a0fb;
-    color: white;
     border: none;
     border-radius: 6px;
     font-size: 12px;
@@ -79,10 +89,15 @@
     transition: background 0.15s;
     letter-spacing: 0.02em;
   }
-  button#createBtn:hover:not(:disabled) { background: #0d8de3; }
-  button#createBtn:disabled { background: #a8d8fb; cursor: not-allowed; }
+  .btn-primary { background: #18a0fb; color: white; }
+  .btn-primary:hover:not(:disabled) { background: #0d8de3; }
+  .btn-primary:disabled { background: #a8d8fb; cursor: not-allowed; }
+  .btn-success { background: #1a7f37; color: white; }
+  .btn-success:hover:not(:disabled) { background: #136127; }
+  .btn-success:disabled { background: #8fcca3; cursor: not-allowed; }
 
-  #status {
+  /* ── Status line ── */
+  .status {
     margin-top: 10px;
     font-size: 11px;
     color: #888;
@@ -90,71 +105,161 @@
     line-height: 1.6;
     word-break: break-word;
   }
-  #status.success { color: #1a7f37; }
-  #status.error   { color: #cf222e; }
+  .status.success { color: #1a7f37; }
+  .status.error   { color: #cf222e; }
 
-  .hint {
-    font-size: 10px;
-    color: #aaa;
-    margin-top: 3px;
-  }
-
+  .hint { font-size: 10px; color: #aaa; margin-top: 3px; }
   a { color: #18a0fb; text-decoration: none; }
   a:hover { text-decoration: underline; }
+
+  /* ── Fix list ── */
+  .fix-list {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+
+  .fix-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid #e8e8e8;
+    border-radius: 6px;
+    background: #fafafa;
+  }
+  .fix-item input[type="checkbox"] { margin-top: 2px; cursor: pointer; flex-shrink: 0; }
+  .fix-item-body { flex: 1; min-width: 0; }
+  .fix-item-name {
+    font-weight: 600;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .fix-item-detail {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .color-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.1);
+    flex-shrink: 0;
+  }
+  .fix-arrow { color: #aaa; font-size: 10px; }
+  .fix-hex { font-size: 10px; font-family: monospace; color: #555; }
+  .fix-reason { font-size: 10px; color: #aaa; margin-top: 2px; }
+
+  .severity-warning { border-left: 3px solid #e6a817; }
+  .severity-error   { border-left: 3px solid #cf222e; }
+
+  .fix-summary {
+    font-size: 11px;
+    color: #666;
+    margin-top: 8px;
+  }
+  .fix-summary strong { color: #1a1a1a; }
+
+  .empty-state {
+    text-align: center;
+    padding: 24px 16px;
+    color: #aaa;
+    font-size: 11px;
+    line-height: 1.7;
+  }
 </style>
 </head>
 <body>
 
-<h2>⬡ Figma → GitLab MR</h2>
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('submit')">⬡ Submit Review</div>
+  <div class="tab"        onclick="switchTab('apply')">🔧 Apply Fixes</div>
+</div>
 
-<label>Project Path</label>
-<input type="text" id="projectPath" placeholder="namespace/project-name" />
+<!-- ══════════════════════════════════════════════════════════ SUBMIT TAB -->
+<div class="panel active" id="panel-submit">
 
-<label>Base Branch</label>
-<input type="text" id="baseBranch" placeholder="main" />
+  <label>Project Path</label>
+  <input type="text" id="projectPath" placeholder="namespace/project-name" />
 
-<label>Design System URL</label>
-<input type="url" id="designSystemUrl" placeholder="https://www.figma.com/design/..." />
+  <label>Base Branch</label>
+  <input type="text" id="baseBranch" placeholder="main" />
 
-<hr>
+  <label>Design System URL</label>
+  <input type="url" id="designSystemUrl" placeholder="https://m3.material.io/" />
 
-<label>GitLab Personal Access Token</label>
-<input type="password" id="token" placeholder="glpat-xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
-<div class="hint">Needs <code>api</code> scope. Never stored in source code.</div>
+  <hr>
 
-<label class="checkbox-row">
-  <input type="checkbox" id="rememberToken">
-  Remember token (saved in Figma's local storage on this machine)
-</label>
+  <label>GitLab Personal Access Token</label>
+  <input type="password" id="token" placeholder="glpat-xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+  <div class="hint">Needs <code>api</code> scope. Never stored in source code.</div>
 
-<button id="createBtn" onclick="createMR()">🚀 Create MR</button>
+  <label class="checkbox-row">
+    <input type="checkbox" id="rememberToken">
+    Remember token (saved in Figma's local storage on this machine)
+  </label>
 
-<div id="status"></div>
+  <button class="btn btn-primary" id="createBtn" onclick="createMR()">🚀 Create MR &amp; Start Review</button>
+  <div class="status" id="submitStatus"></div>
+
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ APPLY TAB -->
+<div class="panel" id="panel-apply">
+
+  <label>Review Branch</label>
+  <input type="text" id="reviewBranch" placeholder="figma/review-…" />
+  <div class="hint">Auto-filled after you submit a review. Or paste the source branch name.</div>
+
+  <button class="btn btn-primary" id="loadBtn" onclick="loadFixes()" style="margin-top:10px">
+    Load Fixes
+  </button>
+
+  <div id="fixContent">
+    <div class="empty-state">
+      Load a review branch to see suggested fixes.<br>
+      Fixes are generated by the Fix Agent after review completes.
+    </div>
+  </div>
+
+  <div class="status" id="applyStatus"></div>
+
+</div>
 
 <script>
-  // ─── constants (change here if infra changes) ─────────────────────────────
+  // ─── constants ────────────────────────────────────────────────────────────
   const GITLAB_BASE_URL = 'https://gitlab.com';
   const FLOW_ACCOUNT    = 'ai-figma-design-review-gitlab-ai-hackathon';
 
-  // ─── helpers ─────────────────────────────────────────────────────────────────
+  // ─── tab switching ────────────────────────────────────────────────────────
+  function switchTab(name) {
+    document.querySelectorAll('.tab').forEach((t, i) => {
+      t.classList.toggle('active', (i === 0) === (name === 'submit'));
+    });
+    document.getElementById('panel-submit').classList.toggle('active', name === 'submit');
+    document.getElementById('panel-apply').classList.toggle('active', name === 'apply');
+  }
 
-  function setStatus(text, cls) {
-    const el = document.getElementById('status');
+  // ─── helpers ──────────────────────────────────────────────────────────────
+  function setStatus(id, text, cls) {
+    const el = document.getElementById(id);
     el.textContent = text;
-    el.className = cls || '';
+    el.className = 'status ' + (cls || '');
   }
-
-  function setStatusHTML(html, cls) {
-    const el = document.getElementById('status');
+  function setStatusHTML(id, html, cls) {
+    const el = document.getElementById(id);
     el.innerHTML = html;
-    el.className = cls || '';
+    el.className = 'status ' + (cls || '');
   }
 
-  function setDisabled(on) {
-    document.getElementById('createBtn').disabled = on;
-  }
-
-  function getValues() {
+  function getSubmitValues() {
     return {
       projectPath:     document.getElementById('projectPath').value.trim(),
       baseBranch:      document.getElementById('baseBranch').value.trim() || 'main',
@@ -164,8 +269,7 @@
     };
   }
 
-  // ─── receive messages from code.js ───────────────────────────────────────────
-
+  // ─── receive messages from code.js ───────────────────────────────────────
   window.onmessage = (event) => {
     const msg = event.data.pluginMessage;
     if (!msg) return;
@@ -175,6 +279,7 @@
       document.getElementById('projectPath').value     = s.projectPath;
       document.getElementById('baseBranch').value      = s.baseBranch;
       document.getElementById('designSystemUrl').value = s.designSystemUrl;
+      document.getElementById('reviewBranch').value    = s.lastReviewBranch;
       if (s.token) {
         document.getElementById('token').value           = s.token;
         document.getElementById('rememberToken').checked = true;
@@ -186,86 +291,78 @@
     }
 
     if (msg.type === 'export-error') {
-      setStatus('❌ Export failed: ' + msg.message, 'error');
-      setDisabled(false);
+      setStatus('submitStatus', '❌ Export failed: ' + msg.message, 'error');
+      document.getElementById('createBtn').disabled = false;
+    }
+
+    if (msg.type === 'fixes-applied') {
+      const applied = msg.results.filter(r => r.status === 'applied').length;
+      const failed  = msg.results.length - applied;
+      setStatus('applyStatus',
+        `✅ Applied ${applied} fix${applied !== 1 ? 'es' : ''}` +
+        (failed ? ` · ${failed} could not be applied` : ''),
+        'success'
+      );
+      document.getElementById('applyBtn') && (document.getElementById('applyBtn').disabled = false);
     }
   };
 
-  // ─── main entry point ────────────────────────────────────────────────────────
-
+  // ─── SUBMIT: create MR flow ──────────────────────────────────────────────
   function createMR() {
-    const v = getValues();
+    const v = getSubmitValues();
+    if (!v.token)           { setStatus('submitStatus', '❌ Token is required.', 'error'); return; }
+    if (!v.projectPath)     { setStatus('submitStatus', '❌ Project path is required.', 'error'); return; }
+    if (!v.designSystemUrl) { setStatus('submitStatus', '❌ Design System URL is required.', 'error'); return; }
 
-    if (!v.token)           { setStatus('❌ Token is required.', 'error'); return; }
-    if (!v.projectPath)     { setStatus('❌ Project path is required (e.g. group/repo).', 'error'); return; }
-    if (!v.designSystemUrl) { setStatus('❌ Design System URL is required.', 'error'); return; }
-
-    setDisabled(true);
-    setStatus('Exporting Figma data…');
+    document.getElementById('createBtn').disabled = true;
+    setStatus('submitStatus', 'Exporting Figma data…');
 
     parent.postMessage({ pluginMessage: { type: 'save-settings', settings: v } }, '*');
     parent.postMessage({ pluginMessage: { type: 'get-figma-export', designSystemUrl: v.designSystemUrl } }, '*');
   }
 
-  // ─── GitLab API flow ─────────────────────────────────────────────────────────
-
   async function runGitLabFlow(figmaPayload) {
-    const v   = getValues();
+    const v   = getSubmitValues();
     const api = `${GITLAB_BASE_URL}/api/v4`;
     const h   = { 'Content-Type': 'application/json', 'PRIVATE-TOKEN': v.token };
 
     try {
-      // 1 ── Resolve project
-      setStatus('🔍 Resolving project…');
+      setStatus('submitStatus', '🔍 Resolving project…');
       const projRes = await fetch(`${api}/projects/${encodeURIComponent(v.projectPath)}`, { headers: h });
-      if (!projRes.ok) {
-        const e = await projRes.json().catch(() => ({}));
-        throw new Error(`Project not found: ${e.message || projRes.status}`);
-      }
+      if (!projRes.ok) throw new Error(`Project not found (${projRes.status})`);
       const project = await projRes.json();
 
-      // 2 ── Create review branch
       const ts           = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
       const reviewBranch = `figma/review-${ts}`;
 
-      setStatus('🌿 Creating branch…');
+      setStatus('submitStatus', '🌿 Creating branch…');
       const branchRes = await fetch(`${api}/projects/${project.id}/repository/branches`, {
-        method: 'POST',
-        headers: h,
+        method: 'POST', headers: h,
         body: JSON.stringify({ branch: reviewBranch, ref: v.baseBranch }),
       });
-      if (!branchRes.ok) {
-        const e = await branchRes.json().catch(() => ({}));
-        throw new Error(`Branch creation failed: ${e.message || branchRes.status}`);
-      }
+      if (!branchRes.ok) throw new Error(`Branch creation failed (${branchRes.status})`);
 
-      // 3 ── Commit the Figma JSON
-      const fileName    = `demo/figma-exports/${ts}.json`;
-      const encodedFile = encodeURIComponent(fileName);
-      const commitMsg   = [
+      const fileName  = `demo/figma-exports/${ts}.json`;
+      const commitMsg = [
         'chore: add Figma design snapshot for review',
         '',
         `Page: ${figmaPayload.document?.pageName || '—'}`,
         `Design System: ${figmaPayload.designSystemUrl}`,
       ].join('\n');
 
-      setStatus('📄 Committing Figma export…');
-      const fileRes = await fetch(`${api}/projects/${project.id}/repository/files/${encodedFile}`, {
-        method: 'POST',
-        headers: h,
-        body: JSON.stringify({
-          branch:         reviewBranch,
-          content:        JSON.stringify(figmaPayload, null, 2),
-          commit_message: commitMsg,
-          encoding:       'text',
-        }),
-      });
-      if (!fileRes.ok) {
-        const e = await fileRes.json().catch(() => ({}));
-        throw new Error(`File commit failed: ${e.message || fileRes.status}`);
-      }
+      setStatus('submitStatus', '📄 Committing Figma export…');
+      const fileRes = await fetch(
+        `${api}/projects/${project.id}/repository/files/${encodeURIComponent(fileName)}`,
+        {
+          method: 'POST', headers: h,
+          body: JSON.stringify({
+            branch: reviewBranch, content: JSON.stringify(figmaPayload, null, 2),
+            commit_message: commitMsg, encoding: 'text',
+          }),
+        }
+      );
+      if (!fileRes.ok) throw new Error(`File commit failed (${fileRes.status})`);
 
-      // 4 ── Create the MR
       const pageName    = figmaPayload.document?.pageName || 'Design';
       const description = [
         '## Figma Design Review',
@@ -281,50 +378,159 @@
         '',
         `---`,
         '',
-        `@${FLOW_ACCOUNT} please review this design update and leave your assessment as a comment on this MR.`,
+        `@${FLOW_ACCOUNT} please review this design update.`,
       ].join('\n');
 
-      setStatus('📬 Creating MR…');
+      setStatus('submitStatus', '📬 Creating MR…');
       const mrRes = await fetch(`${api}/projects/${project.id}/merge_requests`, {
-        method: 'POST',
-        headers: h,
+        method: 'POST', headers: h,
         body: JSON.stringify({
-          source_branch:        reviewBranch,
-          target_branch:        v.baseBranch,
-          title:                `[Figma Review] ${pageName} (${ts})`,
-          description,
-          labels:               'design-review',
-          remove_source_branch: true,
+          source_branch: reviewBranch, target_branch: v.baseBranch,
+          title: `[Figma Review] ${pageName} (${ts})`,
+          description, labels: 'design-review', remove_source_branch: true,
         }),
       });
-      if (!mrRes.ok) {
-        const e = await mrRes.json().catch(() => ({}));
-        throw new Error(`MR creation failed: ${e.message || mrRes.status}`);
-      }
+      if (!mrRes.ok) throw new Error(`MR creation failed (${mrRes.status})`);
       const mr = await mrRes.json();
 
-      // 5 ── Post a comment to trigger the Flow
-      // GitLab only fires the "mention" trigger from notes (comments), not from
-      // the MR description, so we post a dedicated comment here.
-      setStatus('🤖 Triggering review flow…');
+      setStatus('submitStatus', '🤖 Triggering review flow…');
       await fetch(`${api}/projects/${project.id}/merge_requests/${mr.iid}/notes`, {
-        method: 'POST',
-        headers: h,
-        body: JSON.stringify({
-          body: `@${FLOW_ACCOUNT} please review this design update.`,
-        }),
+        method: 'POST', headers: h,
+        body: JSON.stringify({ body: `@${FLOW_ACCOUNT} please review this design update.` }),
       });
 
-      setStatusHTML(
-        `✅ MR created! <a href="${mr.web_url}" target="_blank">View !${mr.iid} ↗</a>`,
+      // Persist branch + MR IID so the Apply tab can use them.
+      parent.postMessage({ pluginMessage: { type: 'save-review-ref', branch: reviewBranch, mrIid: mr.iid } }, '*');
+      document.getElementById('reviewBranch').value = reviewBranch;
+
+      setStatusHTML('submitStatus',
+        `✅ MR created! <a href="${mr.web_url}" target="_blank">View !${mr.iid} ↗</a>
+         <br><span style="color:#aaa">Switch to Apply Fixes tab once the review is done.</span>`,
         'success'
       );
 
     } catch (err) {
-      setStatus('❌ ' + err.message, 'error');
+      setStatus('submitStatus', '❌ ' + err.message, 'error');
     }
 
-    setDisabled(false);
+    document.getElementById('createBtn').disabled = false;
+  }
+
+  // ─── APPLY: load + apply fixes ───────────────────────────────────────────
+
+  let loadedFixes = [];
+
+  async function loadFixes() {
+    const branch  = document.getElementById('reviewBranch').value.trim();
+    const token   = document.getElementById('token').value.trim();
+    const project = document.getElementById('projectPath').value.trim();
+
+    if (!branch)  { setStatus('applyStatus', '❌ Branch name is required.', 'error'); return; }
+    if (!token)   { setStatus('applyStatus', '❌ Token is required (fill in Submit tab).', 'error'); return; }
+    if (!project) { setStatus('applyStatus', '❌ Project path is required (fill in Submit tab).', 'error'); return; }
+
+    document.getElementById('loadBtn').disabled = true;
+    setStatus('applyStatus', 'Fetching fix spec…');
+
+    try {
+      const api = `${GITLAB_BASE_URL}/api/v4`;
+      const h   = { 'PRIVATE-TOKEN': token };
+
+      const projRes = await fetch(`${api}/projects/${encodeURIComponent(project)}`, { headers: h });
+      if (!projRes.ok) throw new Error(`Project not found (${projRes.status})`);
+      const proj = await projRes.json();
+
+      const filePath    = encodeURIComponent('demo/figma-fix-spec.json');
+      const specRes     = await fetch(
+        `${api}/projects/${proj.id}/repository/files/${filePath}?ref=${encodeURIComponent(branch)}`,
+        { headers: h }
+      );
+
+      if (specRes.status === 404) {
+        document.getElementById('fixContent').innerHTML = `
+          <div class="empty-state">
+            No fix spec found on this branch yet.<br>
+            The Fix Agent posts one after review completes —<br>watch for the 🔧 comment on your MR.
+          </div>`;
+        setStatus('applyStatus', '');
+        return;
+      }
+      if (!specRes.ok) throw new Error(`Could not fetch fix spec (${specRes.status})`);
+
+      const raw  = await specRes.json();
+      const spec = JSON.parse(atob(raw.content));
+      loadedFixes = spec.fixes || [];
+
+      renderFixList(loadedFixes);
+      setStatus('applyStatus', '');
+
+    } catch (err) {
+      setStatus('applyStatus', '❌ ' + err.message, 'error');
+    }
+
+    document.getElementById('loadBtn').disabled = false;
+  }
+
+  function renderFixList(fixes) {
+    if (!fixes.length) {
+      document.getElementById('fixContent').innerHTML = `
+        <div class="empty-state">No fixes suggested — your design looks good!</div>`;
+      return;
+    }
+
+    const items = fixes.map((fix, i) => {
+      const isColor = fix.property === 'fills' || fix.property === 'strokes';
+      const detail  = isColor
+        ? `<span class="color-swatch" style="background:${fix.target_value || '#ccc'}"></span>
+           <span class="fix-hex">${(fix.current_value || fix.current_hex || '?')}</span>
+           <span class="fix-arrow">→</span>
+           <span class="fix-hex">${fix.target_value}</span>`
+        : `<span class="fix-hex">${fix.target_value}</span>`;
+
+      return `
+        <div class="fix-item severity-${fix.severity || 'warning'}">
+          <input type="checkbox" id="fix-${i}" checked data-index="${i}">
+          <div class="fix-item-body">
+            <div class="fix-item-name">${escHtml(fix.node_name || fix.node_id)}</div>
+            <div class="fix-item-detail">${detail}</div>
+            <div class="fix-reason">${escHtml(fix.reason || '')}</div>
+          </div>
+        </div>`;
+    }).join('');
+
+    const warnings = fixes.filter(f => f.severity === 'warning').length;
+    const errors   = fixes.filter(f => f.severity === 'error').length;
+
+    document.getElementById('fixContent').innerHTML = `
+      <div class="fix-summary">
+        <strong>${fixes.length} fix${fixes.length !== 1 ? 'es' : ''} suggested</strong>
+        ${warnings ? ` · ${warnings} ⚠️` : ''}
+        ${errors   ? ` · ${errors} ❌`   : ''}
+      </div>
+      <div class="fix-list">${items}</div>
+      <button class="btn btn-success" id="applyBtn" onclick="applySelected()">Apply Selected Fixes</button>`;
+  }
+
+  function applySelected() {
+    const selected = loadedFixes.filter((_, i) => {
+      const cb = document.getElementById(`fix-${i}`);
+      return cb && cb.checked;
+    });
+
+    if (!selected.length) {
+      setStatus('applyStatus', '⚠️ No fixes selected.', '');
+      return;
+    }
+
+    document.getElementById('applyBtn').disabled = true;
+    setStatus('applyStatus', `Applying ${selected.length} fix${selected.length !== 1 ? 'es' : ''}…`);
+    parent.postMessage({ pluginMessage: { type: 'apply-fixes', fixes: selected } }, '*');
+  }
+
+  function escHtml(str) {
+    return String(str).replace(/[&<>"']/g, c =>
+      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])
+    );
   }
 </script>
 </body>

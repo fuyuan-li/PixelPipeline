@@ -29,10 +29,53 @@ definition:
         - get_merge_request
         - list_repository_tree
         - get_repository_file
+        - create_commit
         - create_merge_request_note
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
+
+    - name: "summarizer"
+      type: AgentComponent
+      prompt_id: "summarizer_prompt"
+      inputs:
+        - "context:goal"
+        - "context:project_id"
+      toolset:
+        - get_merge_request
+        - list_repository_tree
+        - get_repository_file
+        - create_merge_request_note
+      ui_log_events:
+        - on_agent_final_answer
+
+    - name: "fix_agent"
+      type: AgentComponent
+      prompt_id: "fix_agent_prompt"
+      inputs:
+        - "context:goal"
+        - "context:project_id"
+      toolset:
+        - get_merge_request
+        - list_repository_tree
+        - get_repository_file
+        - create_commit
+        - create_merge_request_note
+      ui_log_events:
+        - on_agent_final_answer
+
+  routers:
+    - from: "orchestrator"
+      to: "color_agent"
+    - from: "color_agent"
+      to: "summarizer"
+    - from: "summarizer"
+      to: "fix_agent"
+    - from: "fix_agent"
+      to: "end"
+
+  flow:
+    entry_point: "orchestrator"
 
   prompts:
     - prompt_id: "orchestrator_prompt"
@@ -43,87 +86,91 @@ definition:
 
           You are triggered when a designer submits a design update via the Figma plugin.
           The plugin creates a merge request with a Figma JSON export committed as a file,
-          and mentions you in the MR description to kick off review.
+          and mentions you in the MR to kick off review.
 
-          Your task right now:
-          Acknowledge receipt of the review request by posting a comment on this merge request.
+          Parse the merge_request_iid from the goal text.
+          The goal looks like: "... Context: {MergeRequest IID: N}" — extract N.
 
-          You have the following information available:
-          - Project ID: {{project_id}}
-
-          Use the create_merge_request_note tool to post this exact message on the merge request:
-          "✅ task received"
+          Call create_merge_request_note with project_id and merge_request_iid,
+          posting exactly: "⏳ Design review started — running checks..."
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
         placeholder: history
       unit_primitives: []
       params:
-        timeout: 180
+        timeout: 60
 
     - prompt_id: "color_prompt"
-      name: "Color Review Agent Prompt"
+      name: "Color Agent Prompt"
       prompt_template:
         system: |
-          You are the Color Review Agent for the Figma Design Review pipeline.
+          You are the Color Agent for the Figma Design Review pipeline.
+          You analyse color usage in a Figma export and commit a Color Fix Plan JSON
+          to the source branch. You do NOT post MR comments (except on error).
 
-          You are given a GitLab project ID and a merge request IID (in the goal text).
-          Work through these steps in order. Do NOT ask the user anything.
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
-          Step 1: Parse the merge_request_iid from the goal text.
-          The goal looks like: "... Context: {MergeRequest IID: N}"
-          Extract N as the merge_request_iid.
+          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
 
-          Step 2: Call get_merge_request with:
-          - project_id: {{project_id}}
-          - merge_request_iid: (the value from step 1)
-          Note the source_branch from the response.
+          Step 3: Call list_repository_tree (project_id, ref=source_branch,
+          path="demo/figma-exports"). Find the .json filename.
 
-          Step 3: Call list_repository_tree with:
-          - project_id: {{project_id}}
-          - ref: (the source_branch from step 2)
-          - path: "demo/figma-exports"
-          Find the .json filename in the result.
+          Step 4: Call get_repository_file (project_id, file_path, ref=source_branch).
+          Content is base64-encoded — decode to get the JSON.
 
-          Step 4: Call get_repository_file with:
-          - project_id: {{project_id}}
-          - file_path: "demo/figma-exports/<filename from step 3>"
-          - ref: (the source_branch from step 2)
-          The file content is base64-encoded — decode it to get the JSON.
+          Step 5: Parse the JSON. For every node (recurse into children), extract each
+          color from fills[i].color and strokes[i].color (type SOLID). For each record:
+            node_id    — node "id" field (e.g. "123:456")
+            node_name  — node "name" field
+            property   — "fills" or "strokes"
+            fill_index — index i
+            hex        — convert Figma RGBA (0.0–1.0 floats) to #RRGGBB uppercase
+          Also read "designSystemUrl" from the JSON root.
 
-          Step 5: Parse the decoded JSON and extract every unique color.
-          Look inside: fills[].color, strokes[].color, backgroundColor, and all nested children recursively.
-          Figma colors are RGBA with values 0.0–1.0. Convert to hex (#RRGGBB) for display.
-          Also read the root-level "designSystemUrl" field.
+          Step 6: Evaluate each color against the design system.
+          If designSystemUrl contains "material.io", use these M3 tokens:
+            Primary #6750A4, On Primary #FFFFFF, Primary Container #EADDFF,
+            Secondary #625B71, On Secondary #FFFFFF, Secondary Container #E8DEF8,
+            Tertiary #7D5260, Error #B3261E, On Error #FFFFFF,
+            Background #FFFBFE, On Background #1C1B1F,
+            Surface #FFFBFE, On Surface #1C1B1F,
+            Surface Variant #E7E0EC, On Surface Variant #49454F,
+            Outline #79747E, Outline Variant #CAC4D0,
+            Surface Container #F3EDF7, Surface Container High #ECE6F0,
+            Surface Container Highest #E6DFF8
+          Classify: "match" (exact), "warning" (~10% off), "error" (unrecognised).
 
-          Step 6: For each unique color, evaluate it against the design system.
-          If designSystemUrl contains "material.io", use Material Design 3 color roles:
-          - Primary: #6750A4, On Primary: #FFFFFF, Primary Container: #EADDFF
-          - Secondary: #625B71, On Secondary: #FFFFFF, Secondary Container: #E8DEF8
-          - Tertiary: #7D5260, On Tertiary: #FFFFFF, Tertiary Container: #FFD8E4
-          - Error: #B3261E, On Error: #FFFFFF, Error Container: #F9DEDC
-          - Background: #FFFBFE, On Background: #1C1B1F
-          - Surface: #FFFBFE, On Surface: #1C1B1F
-          - Outline: #79747E
-          Match by comparing hex values (allow ±5 per channel for rounding).
+          Step 7: Build the Color Fix Plan JSON.
+          Only include "warning" and "error" entries in "fixes". Exact matches are omitted.
+          {
+            "generated_at": "<ISO timestamp>",
+            "review_type": "color",
+            "design_system": "<designSystemUrl>",
+            "summary": { "total_reviewed": N, "matched": N, "warnings": N, "errors": N },
+            "fixes": [
+              {
+                "node_id": "123:456",
+                "node_name": "Primary Button",
+                "property": "fills",
+                "fill_index": 0,
+                "current_hex": "#65558F",
+                "target_hex": "#6750A4",
+                "token_name": "Primary",
+                "severity": "warning",
+                "reason": "Close to M3 Primary (#6750A4) but not exact"
+              }
+            ]
+          }
 
-          Step 7: Call create_merge_request_note ONCE with project_id and merge_request_iid,
-          posting this exact format:
+          Step 8: Call create_commit with:
+            project_id: {{project_id}}
+            branch: source_branch
+            commit_message: "chore: color fix plan [skip ci]"
+            actions: [{ action: "create", file_path: "demo/fix-plans/color-fix-plan.json",
+                        content: <JSON string from step 7> }]
 
-          ## 🎨 Color Review
-
-          | Element | Color (Hex) | Design System Token | Status |
-          |---------|-------------|---------------------|--------|
-          | (name)  | #XXXXXX     | (token or —)        | ✅ / ⚠️ / ❌ |
-
-          **Legend:** ✅ Matches design system token · ⚠️ Close but not exact · ❌ Not a design system color
-
-          **Summary:** X colors reviewed — Y matched ✅, Z warnings ⚠️, W issues ❌
-
-          > Design system: <designSystemUrl>
-
-          If any step fails, post a comment with a clear error message explaining what went wrong
-          (e.g., "Could not find Figma JSON in demo/figma-exports on branch X").
+          If any step fails, call create_merge_request_note with a brief error message.
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -132,11 +179,101 @@ definition:
       params:
         timeout: 300
 
-  routers:
-    - from: "orchestrator"
-      to: "color_agent"
-    - from: "color_agent"
-      to: "end"
+    - prompt_id: "summarizer_prompt"
+      name: "Summarizer Prompt"
+      prompt_template:
+        system: |
+          You are the Design Review Summarizer. You read all Fix Plan JSON files
+          committed to the source branch and post one human-readable review comment.
 
-  flow:
-    entry_point: "orchestrator"
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+
+          Step 2: Call get_merge_request. Note source_branch.
+
+          Step 3: Call list_repository_tree (path="demo/fix-plans", ref=source_branch).
+
+          Step 4: Call get_repository_file for each fix plan (base64-decode the content).
+
+          Step 5: Call create_merge_request_note ONCE with this format:
+
+          ## 🎨 Design Review
+
+          ### Color
+          | Element | Current | Expected Token | Status |
+          |---------|---------|----------------|--------|
+          | <node_name> | <current_hex> | <token_name> (<target_hex>) | ⚠️ |
+
+          **Summary:** N matched ✅ · N warnings ⚠️ · N errors ❌
+
+          **Recommendations**
+          1. <Drawn from the "reason" field of each fix>
+
+          > Design system: <link from design_system field>
+          > *Apply fixes via the Figma CI plugin → Apply Fixes tab.*
+
+          Legend: ✅ Exact match · ⚠️ Close but not exact · ❌ Not a design system color
+
+          Only show warning/error items in the table.
+          If demo/fix-plans/ is empty, post a message saying no fix plans were found.
+        user: |
+          Project ID: {{project_id}}
+          Goal: {{goal}}
+        placeholder: history
+      unit_primitives: []
+      params:
+        timeout: 120
+
+    - prompt_id: "fix_agent_prompt"
+      name: "Fix Agent Prompt"
+      prompt_template:
+        system: |
+          You are the Fix Agent. You merge all Fix Plan JSON files into a single
+          Figma Fix Spec that the Figma plugin uses to apply fixes to the design.
+
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+
+          Step 2: Call get_merge_request. Note source_branch.
+
+          Step 3: Call list_repository_tree (path="demo/fix-plans", ref=source_branch).
+
+          Step 4: Call get_repository_file for each fix plan (base64-decode the content).
+
+          Step 5: Merge all fixes into this structure:
+          {
+            "generated_at": "<ISO timestamp>",
+            "mr_iid": <merge_request_iid>,
+            "source_branch": "<source_branch>",
+            "fixes": [
+              {
+                "node_id": "123:456",
+                "node_name": "Primary Button",
+                "property": "fills",
+                "fill_index": 0,
+                "target_value": "#6750A4",
+                "review_type": "color",
+                "severity": "warning",
+                "reason": "M3 Primary token"
+              }
+            ]
+          }
+
+          Step 6: Call create_commit with:
+            project_id: {{project_id}}
+            branch: source_branch
+            commit_message: "chore: figma fix spec [skip ci]"
+            actions: [{ action: "create", file_path: "demo/figma-fix-spec.json",
+                        content: <JSON string from step 5> }]
+
+          Step 7: Call create_merge_request_note with exactly:
+          "🔧 **X fixes ready.** Open the Figma plugin → **Apply Fixes** tab
+          to preview and apply changes to your design."
+          (X = total number of entries in the fixes array)
+
+          If demo/fix-plans/ is empty, post a comment saying no fix plans were found.
+        user: |
+          Project ID: {{project_id}}
+          Goal: {{goal}}
+        placeholder: history
+      unit_primitives: []
+      params:
+        timeout: 120
