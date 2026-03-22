@@ -26,9 +26,11 @@ definition:
         - "context:goal"
         - "context:project_id"
       toolset:
+        - get_merge_request
         - list_repository_tree
         - get_repository_file
         - run_command
+        - create_commit
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
@@ -40,8 +42,10 @@ definition:
         - "context:goal"
         - "context:project_id"
       toolset:
+        - get_merge_request
         - list_repository_tree
         - get_repository_file
+        - create_commit
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
@@ -53,22 +57,10 @@ definition:
         - "context:goal"
         - "context:project_id"
       toolset:
+        - get_merge_request
         - list_repository_tree
         - get_repository_file
-      ui_log_events:
-        - on_agent_final_answer
-        - on_tool_execution_success
-
-    - name: "aggregator"
-      type: AgentComponent
-      prompt_id: "aggregator_prompt"
-      inputs:
-        - "context:goal"
-        - "context:project_id"
-      toolset:
-        - get_merge_request
         - create_commit
-        - create_merge_request_note
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
@@ -108,8 +100,6 @@ definition:
     - from: "design_system_agent"
       to: "color_agent"
     - from: "color_agent"
-      to: "aggregator"
-    - from: "aggregator"
       to: "summarizer"
     - from: "summarizer"
       to: "fix_agent"
@@ -129,20 +119,10 @@ definition:
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
-          Step 2: Call get_merge_request (project_id, merge_request_iid).
+          Step 2: Call get_merge_request (project_id, merge_request_iid) to confirm the MR exists.
 
-          Step 3: Call create_merge_request_note with project_id and merge_request_iid,
-          posting exactly: "⏳ Design review started — running checks..."
-
-          Step 4: Output the following as your final answer, wrapped in markers so
-          downstream agents can reliably locate it in history:
-
-          ORCHESTRATOR_OUTPUT_START
-          {
-            "source_branch": "<source_branch from the MR>",
-            "merge_request_iid": <merge_request_iid>
-          }
-          ORCHESTRATOR_OUTPUT_END
+          Step 3: Call create_merge_request_note posting exactly:
+          "⏳ Design review started — running checks..."
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -156,32 +136,39 @@ definition:
       prompt_template:
         system: |
           You are the Design System Agent for the Figma Design Review pipeline.
-          Your sole responsibility is to fetch the design system standards and pass them
-          to downstream reviewer agents via your final answer.
           You are the only agent in this pipeline that calls run_command.
+          You fetch the design system standards and write them to the repo so that
+          downstream reviewer agents can read them.
 
-          Step 1: Read source_branch from the conversation history above
-          (output by the orchestrator).
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
-          Step 2: Call list_repository_tree (project_id, ref=source_branch,
+          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
+
+          Step 3: Call list_repository_tree (project_id, ref=source_branch,
           path="demo/figma-exports"). Find the .json filename.
 
-          Step 3: Call get_repository_file (project_id, file_path, ref=source_branch).
+          Step 4: Call get_repository_file (project_id, file_path, ref=source_branch).
           Base64-decode the content to get the Figma JSON.
           Read "designSystemUrl" from the JSON root.
 
-          Step 4: Call run_command with: curl -s "<designSystemUrl>"
+          Step 5: Call run_command with: curl -s "<designSystemUrl>"
           Parse the response and extract all design system token definitions:
           - Color tokens: token name → canonical hex value
           - Typography tokens: token name → fontFamily, fontSize, fontWeight, textColor
 
-          Step 5: Output your final answer wrapped in markers so downstream agents can
-          reliably locate it in history:
+          Step 6: Call create_commit with:
+            project_id: {{project_id}}
+            branch: source_branch
+            commit_message: "chore: design system tokens [skip ci]"
+            actions: [{
+              action: "create",
+              file_path: "demo/design-system-tokens.json",
+              content: <JSON string with this structure>
+            }]
 
-          DESIGN_SYSTEM_OUTPUT_START
+          The JSON to commit:
           {
             "design_system_url": "<designSystemUrl>",
-            "source_branch": "<source_branch>",
             "color_tokens": [
               { "name": "Primary", "hex": "#6750A4" },
               ...
@@ -192,25 +179,12 @@ definition:
               ...
             ]
           }
-          DESIGN_SYSTEM_OUTPUT_END
 
-          If fetching the design system URL fails, still wrap the error output:
-
-          DESIGN_SYSTEM_OUTPUT_START
-          {
-            "design_system_url": "<designSystemUrl>",
-            "source_branch": "<source_branch>",
-            "error": "<description of what failed>",
-            "color_tokens": [],
-            "typography_tokens": []
-          }
-          DESIGN_SYSTEM_OUTPUT_END
+          If run_command fails, commit the file anyway with empty token arrays and
+          an "error" field so downstream agents know to skip token validation.
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
-
-          Look for ORCHESTRATOR_OUTPUT_START / ORCHESTRATOR_OUTPUT_END in the conversation
-          history above to find source_branch.
         placeholder: history
       unit_primitives: []
       params:
@@ -222,43 +196,51 @@ definition:
         system: |
           You are the Color Agent for the Figma Design Review pipeline.
           You are one of potentially several reviewer agents.
-          You analyse color usage in a Figma export and return a Color Fix Plan JSON
-          as your final answer. You do NOT commit files or post MR comments.
+          You analyse color usage in a Figma export and commit a Color Fix Plan JSON
+          to the source branch.
 
-          Step 1: Find the block between DESIGN_SYSTEM_OUTPUT_START and DESIGN_SYSTEM_OUTPUT_END
-          in the conversation history above. Parse the JSON inside it to get source_branch
-          and color_tokens. Do NOT call get_merge_request or run_command.
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
-          Step 2: Call list_repository_tree (project_id, ref=source_branch,
+          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
+
+          Step 3: Call get_repository_file (project_id,
+          file_path="demo/design-system-tokens.json", ref=source_branch).
+          Base64-decode to get the design system tokens (color_tokens array).
+
+          Step 4: Call list_repository_tree (project_id, ref=source_branch,
           path="demo/figma-exports"). Find the .json filename.
 
-          Step 3: Call get_repository_file (project_id, file_path, ref=source_branch).
+          Step 5: Call get_repository_file (project_id, file_path, ref=source_branch).
           Base64-decode the content to get the Figma JSON.
 
-          Step 4: Parse the JSON. For every node (recurse into children), extract each
-          color from fills[i].color and strokes[i].color (type SOLID). For each record:
-            node_id    — node "id" field (e.g. "123:456")
+          Step 6: Parse the Figma JSON. For every node (recurse into children), extract
+          each color from fills[i].color and strokes[i].color (type SOLID). For each:
+            node_id    — node "id" field
             node_name  — node "name" field
             property   — "fills" or "strokes"
             fill_index — index i
             hex        — convert Figma RGBA (0.0–1.0 floats) to #RRGGBB uppercase
 
-          Step 5: Evaluate each extracted hex against the color_tokens from history:
+          Step 7: Evaluate each hex against color_tokens from Step 3:
             "match"   — hex exactly matches a token
             "warning" — perceptually close (~10%) but not exact
             "error"   — no recognisable design system color
 
-          Step 6: Build and output the Color Fix Plan JSON as your final answer.
-          Only include "warning" and "error" entries in "fixes". Exact matches are omitted.
+          Step 8: Call create_commit with:
+            project_id: {{project_id}}
+            branch: source_branch
+            commit_message: "chore: color fix plan [skip ci]"
+            actions: [{
+              action: "create",
+              file_path: "demo/fix-plans/color-fix-plan.json",
+              content: <JSON string>
+            }]
 
-          You MUST wrap your JSON output with these exact marker lines so the aggregator
-          can reliably locate it in the conversation history:
-
-          REVIEWER_OUTPUT_START
+          The JSON to commit (only "warning" and "error" entries in fixes):
           {
             "generated_at": "<ISO timestamp>",
             "review_type": "color",
-            "design_system": "<design_system_url from history>",
+            "design_system": "<design_system_url from tokens file>",
             "summary": { "total_reviewed": N, "matched": N, "warnings": N, "errors": N },
             "fixes": [
               {
@@ -274,12 +256,10 @@ definition:
               }
             ]
           }
-          REVIEWER_OUTPUT_END
 
-          The aggregator downstream will collect all reviewer outputs and handle commits.
-          If any step fails, still wrap your error JSON with the same markers:
-
-          REVIEWER_OUTPUT_START
+          Once committed, the summarizer downstream will read all fix plans and post
+          a human-readable review comment.
+          If any step fails, commit an error fix plan:
           {
             "generated_at": "<ISO timestamp>",
             "review_type": "color",
@@ -287,13 +267,9 @@ definition:
             "summary": { "total_reviewed": 0, "matched": 0, "warnings": 0, "errors": 0 },
             "fixes": []
           }
-          REVIEWER_OUTPUT_END
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
-
-          The design system standards (color_tokens, source_branch) are in the conversation
-          history above. Use them directly — do not fetch the design system URL again.
         placeholder: history
       unit_primitives: []
       params:
@@ -303,76 +279,32 @@ definition:
       name: "Font Agent Prompt"
       prompt_template:
         system: |
-          You are one of potentially several reviewer agents in the Figma Design Review pipeline.
-          For this run, skip all analysis and immediately output the following as your final
-          answer — do not call any tools.
-          The aggregator downstream will collect outputs from all reviewer agents.
+          You are the Font Agent for the Figma Design Review pipeline.
+          You are one of potentially several reviewer agents.
+          Once committed, the summarizer downstream will read all fix plans.
+          For this run, skip all analysis. Call get_merge_request to get source_branch,
+          then call create_commit to write an empty fix plan to the repo.
 
-          REVIEWER_OUTPUT_START
-          {
-            "generated_at": "2024-01-01T00:00:00Z",
-            "review_type": "font",
-            "design_system": "",
-            "summary": { "total_reviewed": 0, "matched": 0, "warnings": 0, "errors": 0 },
-            "fixes": []
-          }
-          REVIEWER_OUTPUT_END
-        user: |
-          Project ID: {{project_id}}
-          Goal: {{goal}}
-        placeholder: history
-      unit_primitives: []
-      params:
-        timeout: 300
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
-    - prompt_id: "aggregator_prompt"
-      name: "Aggregator Prompt"
-      prompt_template:
-        system: |
-          You are the Aggregator for the Figma Design Review pipeline.
-          All upstream reviewer agent(s) have already completed their analysis.
-          Their full JSON outputs are in the conversation history above.
+          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
 
-          Step 1: Find the block between DESIGN_SYSTEM_OUTPUT_START and DESIGN_SYSTEM_OUTPUT_END
-          in the conversation history above and read source_branch from it.
-          If that block is missing, look for ORCHESTRATOR_OUTPUT_START / ORCHESTRATOR_OUTPUT_END
-          instead. If neither is found, call get_merge_request to obtain source_branch.
-
-          Step 3: From the conversation history above, find all blocks delimited by
-          REVIEWER_OUTPUT_START and REVIEWER_OUTPUT_END. Each upstream reviewer agent
-          wraps its JSON output in these markers. Extract the JSON from each block.
-          If a block's content is not valid JSON, substitute an empty result:
-            { "review_type": "<type>", "generated_at": "<now>",
-              "summary": { "total_reviewed": 0, "matched": 0, "warnings": 0, "errors": 0 },
-              "fixes": [] }
-          Never abort because one reviewer's result was missing or errored.
-
-          Step 4: Call create_commit ONCE with:
+          Step 3: Call create_commit with:
             project_id: {{project_id}}
             branch: source_branch
-            commit_message: "chore: design review fix plans [skip ci]"
-            actions: one "create" action per reviewer JSON collected:
-              - { action: "create",
-                  file_path: "demo/fix-plans/<review_type>-fix-plan.json",
-                  content: <reviewer JSON string> }
-          Include an entry for each reviewer even if its fixes array is empty.
-          Skip an entry only if the reviewer produced absolutely no output.
-
-          Step 5: If the commit fails, call create_merge_request_note with a brief
-          error message explaining which fix plans could not be saved.
-
-          Your final answer should be a short status summary, e.g.:
-          "Aggregator complete. Committed fix plans: color."
+            commit_message: "chore: font fix plan [skip ci]"
+            actions: [{
+              action: "create",
+              file_path: "demo/fix-plans/font-fix-plan.json",
+              content: "{\"generated_at\":\"2024-01-01T00:00:00Z\",\"review_type\":\"font\",\"design_system\":\"\",\"summary\":{\"total_reviewed\":0,\"matched\":0,\"warnings\":0,\"errors\":0},\"fixes\":[]}"
+            }]
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
-
-          The upstream reviewer agent(s) outputs are in the conversation history above.
-          Please collect all reviewer JSON outputs and commit them as described.
         placeholder: history
       unit_primitives: []
       params:
-        timeout: 120
+        timeout: 60
 
     - prompt_id: "summarizer_prompt"
       name: "Summarizer Prompt"
@@ -450,11 +382,9 @@ definition:
           Step 3: Call list_repository_tree (path="demo/fix-plans", ref=source_branch).
 
           Step 4: Call get_repository_file for each fix plan (base64-decode the content).
-          Skip any fix plan that has an "error" field (it could not be completed).
+          Skip any fix plan that has an "error" field.
 
-          Step 5: Merge all fixes from all valid plans (color, font, etc.) into this structure.
-          For color fixes, "target_value" is the target hex string.
-          For font fixes, "target_value" is an object with the corrected typography properties.
+          Step 5: Merge all fixes from all valid plans into this structure:
           {
             "generated_at": "<ISO timestamp>",
             "mr_iid": <merge_request_iid>,
@@ -469,20 +399,6 @@ definition:
                 "review_type": "color",
                 "severity": "warning",
                 "reason": "M3 Primary token"
-              },
-              {
-                "node_id": "789:012",
-                "node_name": "Card Title",
-                "property": "typography",
-                "target_value": {
-                  "fontFamily": "Roboto",
-                  "fontSize": 16,
-                  "fontWeight": 500,
-                  "textColor": "#1C1B1F"
-                },
-                "review_type": "font",
-                "severity": "warning",
-                "reason": "Title Medium token"
               }
             ]
           }
