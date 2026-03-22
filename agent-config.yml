@@ -3,3 +3,4 @@ network_policy:
   allowed_domains:
     - m3.material.io
     - "*.material.io"
+    - developer.apple.com/design/human-interface-guidelines
