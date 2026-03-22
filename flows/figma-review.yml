@@ -36,6 +36,23 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
+    - name: "font_agent"
+      type: AgentComponent
+      prompt_id: "font_prompt"
+      inputs:
+        - "context:goal"
+        - "context:project_id"
+      toolset:
+        - get_merge_request
+        - list_repository_tree
+        - get_repository_file
+        - run_command
+        - create_commit
+        - create_merge_request_note
+      ui_log_events:
+        - on_agent_final_answer
+        - on_tool_execution_success
+
     - name: "summarizer"
       type: AgentComponent
       prompt_id: "summarizer_prompt"
@@ -66,9 +83,15 @@ definition:
         - on_agent_final_answer
 
   routers:
+    # orchestrator 并行分发给 color_agent 和 font_agent
     - from: "orchestrator"
       to: "color_agent"
+    - from: "orchestrator"
+      to: "font_agent"
+    # 两个并行 agent 都完成后汇聚到 summarizer
     - from: "color_agent"
+      to: "summarizer"
+    - from: "font_agent"
       to: "summarizer"
     - from: "summarizer"
       to: "fix_agent"
@@ -178,6 +201,92 @@ definition:
       params:
         timeout: 300
 
+    - prompt_id: "font_prompt"
+      name: "Font Agent Prompt"
+      prompt_template:
+        system: |
+          You are the Font Agent for the Figma Design Review pipeline.
+          You analyse typography usage (font family, font size, font weight, and text color)
+          in a Figma export and commit a Font Fix Plan JSON to the source branch.
+          You do NOT post MR comments (except on error).
+
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+
+          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
+
+          Step 3: Call list_repository_tree (project_id, ref=source_branch,
+          path="demo/figma-exports"). Find the .json filename.
+
+          Step 4: Call get_repository_file (project_id, file_path, ref=source_branch).
+          Content is base64-encoded — decode to get the JSON.
+
+          Step 5: Parse the JSON. For every node of type TEXT (recurse into children),
+          extract typography properties from the node's "style" object. For each record:
+            node_id     — node "id" field (e.g. "123:456")
+            node_name   — node "name" field
+            font_family — style.fontFamily (e.g. "Roboto")
+            font_size   — style.fontSize (numeric, in px)
+            font_weight — style.fontWeight (numeric, e.g. 400, 700)
+            text_color  — convert fills[0].color (type SOLID) RGBA floats to #RRGGBB uppercase;
+                          use "none" if no solid fill present
+          Also read "designSystemUrl" from the JSON root.
+
+          Step 6: Read the "designSystemUrl" from the Figma JSON.
+          Call run_command with: curl -s "<designSystemUrl>"
+          From the fetched content, extract the complete list of typography token definitions —
+          token names and their canonical values for fontFamily, fontSize, fontWeight,
+          and any text color tokens.
+          Do NOT use any hardcoded values — all token names and values must come
+          from what you actually read at the URL.
+          Evaluate each extracted typography record against those tokens:
+            "match"   — all checked properties exactly match a token
+            "warning" — one or more properties are close but not exact
+            "error"   — one or more properties do not match any design system token
+
+          Step 7: Build the Font Fix Plan JSON.
+          Only include "warning" and "error" entries in "fixes". Exact matches are omitted.
+          For each fix entry, record only the properties that deviate (fontFamily, fontSize,
+          fontWeight, textColor) — omit properties that already match.
+          {
+            "generated_at": "<ISO timestamp>",
+            "review_type": "font",
+            "design_system": "<designSystemUrl>",
+            "summary": { "total_reviewed": N, "matched": N, "warnings": N, "errors": N },
+            "fixes": [
+              {
+                "node_id": "123:456",
+                "node_name": "Card Title",
+                "current_font_family": "Arial",
+                "target_font_family": "Roboto",
+                "current_font_size": 15,
+                "target_font_size": 16,
+                "current_font_weight": 400,
+                "target_font_weight": 500,
+                "current_text_color": "#1A1A1A",
+                "target_text_color": "#1C1B1F",
+                "token_name": "Title Medium",
+                "severity": "warning",
+                "reason": "Font size 15px and family Arial do not match Title Medium token (Roboto 16px Medium)"
+              }
+            ]
+          }
+
+          Step 8: Call create_commit with:
+            project_id: {{project_id}}
+            branch: source_branch
+            commit_message: "chore: font fix plan [skip ci]"
+            actions: [{ action: "create", file_path: "demo/fix-plans/font-fix-plan.json",
+                        content: <JSON string from step 7> }]
+
+          If any step fails, call create_merge_request_note with a brief error message.
+        user: |
+          Project ID: {{project_id}}
+          Goal: {{goal}}
+        placeholder: history
+      unit_primitives: []
+      params:
+        timeout: 300
+
     - prompt_id: "summarizer_prompt"
       name: "Summarizer Prompt"
       prompt_template:
@@ -192,6 +301,7 @@ definition:
           Step 3: Call list_repository_tree (path="demo/fix-plans", ref=source_branch).
 
           Step 4: Call get_repository_file for each fix plan (base64-decode the content).
+          Separate plans by their "review_type" field ("color" vs "font").
 
           Step 5: Call create_merge_request_note ONCE with this format:
 
@@ -205,14 +315,29 @@ definition:
           **Summary:** N matched ✅ · N warnings ⚠️ · N errors ❌
 
           **Recommendations**
-          1. <Drawn from the "reason" field of each fix>
+          1. <Drawn from the "reason" field of each color fix>
+
+          ---
+
+          ### Typography
+          | Element | Current | Expected Token | Status |
+          |---------|---------|----------------|--------|
+          | <node_name> | <current_font_family> <current_font_size>px / <current_text_color> | <token_name> | ⚠️ |
+
+          **Summary:** N matched ✅ · N warnings ⚠️ · N errors ❌
+
+          **Recommendations**
+          1. <Drawn from the "reason" field of each font fix>
+
+          ---
 
           > Design system: <link from design_system field>
           > *Apply fixes via the Figma CI plugin → Apply Fixes tab.*
 
-          Legend: ✅ Exact match · ⚠️ Close but not exact · ❌ Not a design system color
+          Legend: ✅ Exact match · ⚠️ Close but not exact · ❌ Not a design system token
 
-          Only show warning/error items in the table.
+          Only show warning/error items in each table.
+          Omit a section entirely if its fix plan file is missing or contains no fixes.
           If demo/fix-plans/ is empty, post a message saying no fix plans were found.
         user: |
           Project ID: {{project_id}}
@@ -237,7 +362,9 @@ definition:
 
           Step 4: Call get_repository_file for each fix plan (base64-decode the content).
 
-          Step 5: Merge all fixes into this structure:
+          Step 5: Merge all fixes from all plans (color, font, etc.) into this structure.
+          For color fixes, "target_value" is the target hex string.
+          For font fixes, "target_value" is an object with the corrected typography properties.
           {
             "generated_at": "<ISO timestamp>",
             "mr_iid": <merge_request_iid>,
@@ -252,6 +379,20 @@ definition:
                 "review_type": "color",
                 "severity": "warning",
                 "reason": "M3 Primary token"
+              },
+              {
+                "node_id": "789:012",
+                "node_name": "Card Title",
+                "property": "typography",
+                "target_value": {
+                  "fontFamily": "Roboto",
+                  "fontSize": 16,
+                  "fontWeight": 500,
+                  "textColor": "#1C1B1F"
+                },
+                "review_type": "font",
+                "severity": "warning",
+                "reason": "Title Medium token"
               }
             ]
           }
