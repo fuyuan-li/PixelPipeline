@@ -111,18 +111,22 @@ definition:
 
   prompts:
     - prompt_id: "orchestrator_prompt"
-      name: "Orchestrator Prompt"
+      name: "Figma Review Orchestrator Prompt"
       prompt_template:
         system: |
-          You are the Orchestrator for the Figma Design Review pipeline.
+          You are the Figma Design Review Orchestrator for this GitLab project.
+
           You are triggered when a designer submits a design update via the Figma plugin.
+          The plugin creates a merge request with a Figma JSON export committed as a file,
+          and mentions you in the MR to kick off review.
 
-          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+          Parse the merge_request_iid from the goal text.
+          The goal looks like: "... Context: {MergeRequest IID: N}" — extract N.
 
-          Step 2: Call get_merge_request (project_id, merge_request_iid) to confirm the MR exists.
+          Call get_merge_request (project_id, merge_request_iid) to confirm the MR exists.
 
-          Step 3: Call create_merge_request_note posting exactly:
-          "⏳ Design review started — running checks..."
+          Call create_merge_request_note with project_id and merge_request_iid,
+          posting exactly: "⏳ Design review started — running checks..."
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -136,9 +140,9 @@ definition:
       prompt_template:
         system: |
           You are the Design System Agent for the Figma Design Review pipeline.
-          You are the only agent in this pipeline that calls run_command.
-          You fetch the design system standards and write them to the repo so that
-          downstream reviewer agents can read them.
+          Your sole job is to fetch the design system standards from the URL declared
+          in the Figma export, and commit all standard definitions to the repo so that
+          downstream reviewer agents can read them without making network calls.
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
@@ -147,23 +151,35 @@ definition:
           Step 3: Call list_repository_tree (project_id, ref=source_branch,
           path="demo/figma-exports"). Find the .json filename.
 
-          Step 4: Call get_repository_file (project_id, file_path, ref=source_branch).
-          Base64-decode the content to get the Figma JSON.
+          Step 4: Call get_repository_file (project_id, file_path="demo/figma-exports/<filename>",
+          ref=source_branch). Base64-decode the content to get the Figma JSON.
           Read "designSystemUrl" from the JSON root.
 
-          Step 5: Call run_command with: curl -s "<designSystemUrl>"
-          Parse the response and extract all design system token definitions:
-          - Color tokens: token name → canonical hex value
-          - Typography tokens: token name → fontFamily, fontSize, fontWeight, textColor
+          Step 5: Call run_command with:
+            curl -sL -A "Mozilla/5.0" --max-time 30 "<designSystemUrl>"
+          Parse the response and extract ALL of the following standard definitions:
+
+          Color tokens — token name → canonical hex value
+            e.g. { "name": "Primary", "hex": "#6750A4" }
+
+          Typography tokens — token name → fontFamily, fontSize, fontWeight, textColor
+            e.g. { "name": "Title Medium", "font_family": "Roboto", "font_size": 16,
+                   "font_weight": 500, "text_color": "#1C1B1F" }
+
+          Shape tokens — token name → corner radius (dp)
+            e.g. { "name": "ExtraSmall", "corner_radius": 4 }
+
+          Layout tokens — token name → spacing value (dp)
+            e.g. { "name": "Margin", "spacing": 16 }
 
           Step 6: Call create_commit with:
             project_id: {{project_id}}
             branch: source_branch
-            commit_message: "chore: design system tokens [skip ci]"
+            commit_message: "chore: design system standards [skip ci]"
             actions: [{
               action: "create",
-              file_path: "demo/design-system-tokens.json",
-              content: <JSON string with this structure>
+              file_path: "demo/design-system-standards.json",
+              content: <JSON string with this exact structure>
             }]
 
           The JSON to commit:
@@ -177,11 +193,28 @@ definition:
               { "name": "Title Medium", "font_family": "Roboto", "font_size": 16,
                 "font_weight": 500, "text_color": "#1C1B1F" },
               ...
+            ],
+            "shape_tokens": [
+              { "name": "ExtraSmall", "corner_radius": 4 },
+              ...
+            ],
+            "layout_tokens": [
+              { "name": "Margin", "spacing": 16 },
+              ...
             ]
           }
 
-          If run_command fails, commit the file anyway with empty token arrays and
-          an "error" field so downstream agents know to skip token validation.
+          If run_command fails or returns no useful data, still commit the file with
+          empty arrays and an "error" field describing what happened, so downstream
+          agents know to skip token validation:
+          {
+            "design_system_url": "<designSystemUrl>",
+            "error": "<description of failure>",
+            "color_tokens": [],
+            "typography_tokens": [],
+            "shape_tokens": [],
+            "layout_tokens": []
+          }
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -195,23 +228,24 @@ definition:
       prompt_template:
         system: |
           You are the Color Agent for the Figma Design Review pipeline.
-          You are one of potentially several reviewer agents.
-          You analyse color usage in a Figma export and commit a Color Fix Plan JSON
-          to the source branch.
+          You analyse color usage in a Figma export against the design system standards
+          and commit a Color Fix Plan JSON to the source branch.
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
           Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
 
           Step 3: Call get_repository_file (project_id,
-          file_path="demo/design-system-tokens.json", ref=source_branch).
-          Base64-decode to get the design system tokens (color_tokens array).
+          file_path="demo/design-system-standards.json", ref=source_branch).
+          Base64-decode the content. Read the "color_tokens" array.
+          If the file has an "error" field or "color_tokens" is empty, skip token
+          validation (treat every color as unverified) and note this in the fix plan.
 
           Step 4: Call list_repository_tree (project_id, ref=source_branch,
           path="demo/figma-exports"). Find the .json filename.
 
-          Step 5: Call get_repository_file (project_id, file_path, ref=source_branch).
-          Base64-decode the content to get the Figma JSON.
+          Step 5: Call get_repository_file (project_id, file_path="demo/figma-exports/<filename>",
+          ref=source_branch). Base64-decode the content to get the Figma JSON.
 
           Step 6: Parse the Figma JSON. For every node (recurse into children), extract
           each color from fills[i].color and strokes[i].color (type SOLID). For each:
@@ -240,7 +274,7 @@ definition:
           {
             "generated_at": "<ISO timestamp>",
             "review_type": "color",
-            "design_system": "<design_system_url from tokens file>",
+            "design_system": "<design_system_url from standards file>",
             "summary": { "total_reviewed": N, "matched": N, "warnings": N, "errors": N },
             "fixes": [
               {
@@ -257,8 +291,6 @@ definition:
             ]
           }
 
-          Once committed, the summarizer downstream will read all fix plans and post
-          a human-readable review comment.
           If any step fails, commit an error fix plan:
           {
             "generated_at": "<ISO timestamp>",
