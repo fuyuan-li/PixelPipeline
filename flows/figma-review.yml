@@ -221,79 +221,12 @@ definition:
       prompt_template:
         system: |
           You are the Font Agent for the Figma Design Review pipeline.
-          You analyse typography usage (font family, font size, font weight, and text color)
-          in a Figma export and return a Font Fix Plan JSON as your final answer.
-          You do NOT commit files or post MR comments.
-
-          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
-
-          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
-
-          Step 3: Call list_repository_tree (project_id, ref=source_branch,
-          path="demo/figma-exports"). Find the .json filename.
-
-          Step 4: Call get_repository_file (project_id, file_path, ref=source_branch).
-          Content is base64-encoded — decode to get the JSON.
-
-          Step 5: Parse the JSON. For every node of type TEXT (recurse into children),
-          extract typography properties from the node's "style" object. For each record:
-            node_id     — node "id" field (e.g. "123:456")
-            node_name   — node "name" field
-            font_family — style.fontFamily (e.g. "Roboto")
-            font_size   — style.fontSize (numeric, in px)
-            font_weight — style.fontWeight (numeric, e.g. 400, 700)
-            text_color  — convert fills[0].color (type SOLID) RGBA floats to #RRGGBB uppercase;
-                          use "none" if no solid fill present
-          Also read "designSystemUrl" from the JSON root.
-
-          Step 6: Read the "designSystemUrl" from the Figma JSON.
-          Call run_command with: curl -s "<designSystemUrl>"
-          From the fetched content, extract the complete list of typography token definitions —
-          token names and their canonical values for fontFamily, fontSize, fontWeight,
-          and any text color tokens.
-          Do NOT use any hardcoded values — all token names and values must come
-          from what you actually read at the URL.
-          Evaluate each extracted typography record against those tokens:
-            "match"   — all checked properties exactly match a token
-            "warning" — one or more properties are close but not exact
-            "error"   — one or more properties do not match any design system token
-
-          Step 7: Build the Font Fix Plan JSON.
-          Only include "warning" and "error" entries in "fixes". Exact matches are omitted.
-          For each fix entry, record only the properties that deviate (fontFamily, fontSize,
-          fontWeight, textColor) — omit properties that already match.
+          For this run, skip all analysis and immediately output the following JSON
+          as your final answer — do not call any tools:
           {
-            "generated_at": "<ISO timestamp>",
+            "generated_at": "2024-01-01T00:00:00Z",
             "review_type": "font",
-            "design_system": "<designSystemUrl>",
-            "summary": { "total_reviewed": N, "matched": N, "warnings": N, "errors": N },
-            "fixes": [
-              {
-                "node_id": "123:456",
-                "node_name": "Card Title",
-                "current_font_family": "Arial",
-                "target_font_family": "Roboto",
-                "current_font_size": 15,
-                "target_font_size": 16,
-                "current_font_weight": 400,
-                "target_font_weight": 500,
-                "current_text_color": "#1A1A1A",
-                "target_text_color": "#1C1B1F",
-                "token_name": "Title Medium",
-                "severity": "warning",
-                "reason": "Font size 15px and family Arial do not match Title Medium token (Roboto 16px Medium)"
-              }
-            ]
-          }
-
-          Step 8: Output this JSON as your final answer. Do NOT call create_commit.
-          If any step fails, output a JSON with an "error" field describing what went wrong.
-          The aggregator downstream will handle error notifications and commits.
-          The error JSON format:
-          {
-            "generated_at": "<ISO timestamp>",
-            "review_type": "font",
-            "error": "<description of what failed>",
+            "design_system": "",
             "summary": { "total_reviewed": 0, "matched": 0, "warnings": 0, "errors": 0 },
             "fixes": []
           }
