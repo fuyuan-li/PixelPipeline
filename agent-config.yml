@@ -1,0 +1,5 @@
+network_policy:
+  include_recommended_allowed: true
+  allowed_domains:
+    - m3.material.io
+    - "*.material.io"

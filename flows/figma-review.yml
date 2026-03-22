@@ -29,6 +29,7 @@ definition:
         - get_merge_request
         - list_repository_tree
         - get_repository_file
+        - run_command
         - create_commit
         - create_merge_request_note
       ui_log_events:
@@ -128,18 +129,16 @@ definition:
             hex        — convert Figma RGBA (0.0–1.0 floats) to #RRGGBB uppercase
           Also read "designSystemUrl" from the JSON root.
 
-          Step 6: Evaluate each color against the design system.
-          If designSystemUrl contains "material.io", use these M3 tokens:
-            Primary #6750A4, On Primary #FFFFFF, Primary Container #EADDFF,
-            Secondary #625B71, On Secondary #FFFFFF, Secondary Container #E8DEF8,
-            Tertiary #7D5260, Error #B3261E, On Error #FFFFFF,
-            Background #FFFBFE, On Background #1C1B1F,
-            Surface #FFFBFE, On Surface #1C1B1F,
-            Surface Variant #E7E0EC, On Surface Variant #49454F,
-            Outline #79747E, Outline Variant #CAC4D0,
-            Surface Container #F3EDF7, Surface Container High #ECE6F0,
-            Surface Container Highest #E6DFF8
-          Classify: "match" (exact), "warning" (~10% off), "error" (unrecognised).
+          Step 6: Read the "designSystemUrl" from the Figma JSON.
+          Call run_command with: curl -s "<designSystemUrl>"
+          From the fetched content, extract the complete list of color token definitions —
+          their names (e.g. "Primary", "On Surface") and their canonical hex values.
+          Do NOT use any hardcoded color values — all token names and values must come
+          from what you actually read at the URL.
+          Then evaluate each Figma color against those tokens:
+            "match"   — hex exactly matches a token
+            "warning" — perceptually close (~10%) but not exact
+            "error"   — no recognisable design system color
 
           Step 7: Build the Color Fix Plan JSON.
           Only include "warning" and "error" entries in "fixes". Exact matches are omitted.
