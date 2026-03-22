@@ -93,15 +93,9 @@ definition:
         - on_agent_final_answer
 
   routers:
-    # fan-out
     - from: "orchestrator"
       to: "color_agent"
-    - from: "orchestrator"
-      to: "font_agent"
-    # fan-in — system waits for both before entering aggregator
     - from: "color_agent"
-      to: "aggregator"
-    - from: "font_agent"
       to: "aggregator"
     - from: "aggregator"
       to: "summarizer"
@@ -198,8 +192,9 @@ definition:
           }
 
           Step 8: Output this JSON as your final answer. Do NOT call create_commit.
+          You are one of potentially several reviewer agents running in sequence.
+          The aggregator downstream will collect all reviewer outputs and handle commits.
           If any step fails, output a JSON with an "error" field describing what went wrong.
-          The aggregator downstream will handle error notifications and commits.
           The error JSON format:
           {
             "generated_at": "<ISO timestamp>",
@@ -220,9 +215,10 @@ definition:
       name: "Font Agent Prompt"
       prompt_template:
         system: |
-          You are the Font Agent for the Figma Design Review pipeline.
+          You are one of potentially several reviewer agents in the Figma Design Review pipeline.
           For this run, skip all analysis and immediately output the following JSON
-          as your final answer — do not call any tools:
+          as your final answer — do not call any tools.
+          The aggregator downstream will collect outputs from all reviewer agents.
           {
             "generated_at": "2024-01-01T00:00:00Z",
             "review_type": "font",
@@ -243,35 +239,31 @@ definition:
       prompt_template:
         system: |
           You are the Aggregator for the Figma Design Review pipeline.
-          color_agent and font_agent have already completed their analysis in parallel.
+          All upstream reviewer agent(s) have already completed their analysis.
           Their full JSON outputs are in the conversation history above.
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
           Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
 
-          Step 3: From the conversation history above, locate:
-          - The JSON with "review_type": "color"  (output from color_agent)
-          - The JSON with "review_type": "font"   (output from font_agent)
-          If an agent's output is missing or not valid JSON, substitute an empty result:
+          Step 3: From the conversation history above, collect all JSON objects that have
+          a "review_type" field. Each upstream reviewer agent produces one such JSON.
+          If a reviewer's output is missing or not valid JSON, substitute an empty result:
             { "review_type": "<type>", "generated_at": "<now>",
               "summary": { "total_reviewed": 0, "matched": 0, "warnings": 0, "errors": 0 },
               "fixes": [] }
-          Never abort because one agent's result was missing or errored.
+          Never abort because one reviewer's result was missing or errored.
 
           Step 4: Call create_commit ONCE with:
             project_id: {{project_id}}
             branch: source_branch
             commit_message: "chore: design review fix plans [skip ci]"
-            actions: one "create" action per agent result:
+            actions: one "create" action per reviewer JSON collected, e.g.:
               - { action: "create",
-                  file_path: "demo/fix-plans/color-fix-plan.json",
-                  content: <color JSON string> }
-              - { action: "create",
-                  file_path: "demo/fix-plans/font-fix-plan.json",
-                  content: <font JSON string> }
-          Include an entry for each review type even if its fixes array is empty.
-          Skip an entry only if the agent produced absolutely no output.
+                  file_path: "demo/fix-plans/<review_type>-fix-plan.json",
+                  content: <reviewer JSON string> }
+          Include an entry for each reviewer even if its fixes array is empty.
+          Skip an entry only if the reviewer produced absolutely no output.
 
           Step 5: If the commit fails, call create_merge_request_note with a brief
           error message explaining which fix plans could not be saved.
@@ -282,8 +274,8 @@ definition:
           Project ID: {{project_id}}
           Goal: {{goal}}
 
-          The color_agent and font_agent outputs are in the conversation history above.
-          Please collect both JSON outputs and commit them as described.
+          The upstream reviewer agent(s) outputs are in the conversation history above.
+          Please collect all reviewer JSON outputs and commit them as described.
         placeholder: history
       unit_primitives: []
       params:
