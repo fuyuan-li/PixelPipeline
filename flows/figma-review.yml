@@ -156,10 +156,13 @@ definition:
           Read "designSystemUrl" from the JSON root.
 
           Step 5: Call run_command with:
-            curl -sL -A "Mozilla/5.0" --max-time 30 "<designSystemUrl>"
-          Parse the response and extract ALL of the following standard definitions:
+            curl -s "<designSystemUrl>"
+          From the fetched content, extract the complete list of standard definitions
+          for ALL of the following categories.
+          Do NOT use any hardcoded values — all token names and values must come
+          from what you actually read at the URL.
 
-          Color tokens — token name → canonical hex value
+          Color tokens — their names (e.g. "Primary", "On Surface") and their canonical hex values.
             e.g. { "name": "Primary", "hex": "#6750A4" }
 
           Typography tokens — token name → fontFamily, fontSize, fontWeight, textColor
