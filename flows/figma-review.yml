@@ -134,10 +134,15 @@ definition:
           Step 3: Call create_merge_request_note with project_id and merge_request_iid,
           posting exactly: "⏳ Design review started — running checks..."
 
-          Step 4: Output the following as your final answer so downstream agents can read
-          it from history without calling get_merge_request again:
-            source_branch: <source_branch from the MR>
-            merge_request_iid: <merge_request_iid>
+          Step 4: Output the following as your final answer, wrapped in markers so
+          downstream agents can reliably locate it in history:
+
+          ORCHESTRATOR_OUTPUT_START
+          {
+            "source_branch": "<source_branch from the MR>",
+            "merge_request_iid": <merge_request_iid>
+          }
+          ORCHESTRATOR_OUTPUT_END
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -170,7 +175,10 @@ definition:
           - Color tokens: token name → canonical hex value
           - Typography tokens: token name → fontFamily, fontSize, fontWeight, textColor
 
-          Step 5: Output a JSON as your final answer with this structure:
+          Step 5: Output your final answer wrapped in markers so downstream agents can
+          reliably locate it in history:
+
+          DESIGN_SYSTEM_OUTPUT_START
           {
             "design_system_url": "<designSystemUrl>",
             "source_branch": "<source_branch>",
@@ -184,8 +192,11 @@ definition:
               ...
             ]
           }
+          DESIGN_SYSTEM_OUTPUT_END
 
-          If fetching the design system URL fails, output:
+          If fetching the design system URL fails, still wrap the error output:
+
+          DESIGN_SYSTEM_OUTPUT_START
           {
             "design_system_url": "<designSystemUrl>",
             "source_branch": "<source_branch>",
@@ -193,11 +204,13 @@ definition:
             "color_tokens": [],
             "typography_tokens": []
           }
+          DESIGN_SYSTEM_OUTPUT_END
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
 
-          The orchestrator output (including source_branch) is in the conversation history above.
+          Look for ORCHESTRATOR_OUTPUT_START / ORCHESTRATOR_OUTPUT_END in the conversation
+          history above to find source_branch.
         placeholder: history
       unit_primitives: []
       params:
@@ -212,8 +225,9 @@ definition:
           You analyse color usage in a Figma export and return a Color Fix Plan JSON
           as your final answer. You do NOT commit files or post MR comments.
 
-          Step 1: Read source_branch and color_tokens from the conversation history above
-          (output by the design_system_agent). Do NOT call get_merge_request or run_command.
+          Step 1: Find the block between DESIGN_SYSTEM_OUTPUT_START and DESIGN_SYSTEM_OUTPUT_END
+          in the conversation history above. Parse the JSON inside it to get source_branch
+          and color_tokens. Do NOT call get_merge_request or run_command.
 
           Step 2: Call list_repository_tree (project_id, ref=source_branch,
           path="demo/figma-exports"). Find the .json filename.
@@ -319,11 +333,10 @@ definition:
           All upstream reviewer agent(s) have already completed their analysis.
           Their full JSON outputs are in the conversation history above.
 
-          Step 1: Read source_branch from the conversation history above
-          (output by the orchestrator or design_system_agent). Do NOT call get_merge_request
-          unless source_branch is not present anywhere in the history.
-
-          Step 2: If source_branch is not found in history, call get_merge_request to obtain it.
+          Step 1: Find the block between DESIGN_SYSTEM_OUTPUT_START and DESIGN_SYSTEM_OUTPUT_END
+          in the conversation history above and read source_branch from it.
+          If that block is missing, look for ORCHESTRATOR_OUTPUT_START / ORCHESTRATOR_OUTPUT_END
+          instead. If neither is found, call get_merge_request to obtain source_branch.
 
           Step 3: From the conversation history above, find all blocks delimited by
           REVIEWER_OUTPUT_START and REVIEWER_OUTPUT_END. Each upstream reviewer agent
