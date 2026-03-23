@@ -15,7 +15,7 @@ The latest workflow is:
 1. A designer selects frames or a page in Figma.
 2. The plugin asks which target design system to migrate to.
 3. The plugin exports the Figma structure as JSON and opens a GitLab merge request.
-4. A custom GitLab Flow reads the export and loads cached target design system data from GCP.
+4. A GitLab CI job calls the Cloud Function to fetch cached design system data from GCP and commits it to the branch. The GitLab Flow then reads that committed file.
 5. The flow identifies the best matching components or tokens for the intended UI.
 6. The flow writes review results and a fix spec back to the merge request branch.
 7. The Figma plugin fetches the fix spec and applies the migration in one click.

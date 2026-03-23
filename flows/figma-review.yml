@@ -123,107 +123,59 @@ definition:
 
     # ──────────────────────────────────────────────────────────────────────────
     # 2. DS CATALOG AGENT
-    #    Fetches the component catalog for the target design system and saves it
-    #    as demo/ds-catalog.json so the classifier can use it.
+    #    Verifies that demo/ds-catalog.json was committed by the CI pipeline's
+    #    fetch-design-tokens job (which called the Cloud Function / GCS).
+    #    Falls back to an empty-catalog commit only if the CI job hasn't landed yet.
     # ──────────────────────────────────────────────────────────────────────────
     - prompt_id: "ds_catalog_prompt"
       name: "Design System Catalog Agent"
       prompt_template:
         system: |
           You are the Design System Catalog Agent for the Design System Migration pipeline.
-          Your job is to fetch the component catalog of the TARGET design system
-          so the next agent knows which components are available to map elements into.
 
-          ── DESIGN TOKENS API ──────────────────────────────────────────────────
-          Base URL: https://design-tokens-api-sdzot2fiaq-uc.a.run.app
-          Endpoint: GET <BASE_URL>?system=<slug>&resource=components
-
-          Valid slugs: md3 | antd | carbon
-          The slug comes directly from the Figma export (designSystem.slug).
-          Do NOT guess or hardcode it.
-
-          Each component in the response has:
-            id     — dot-notation identifier (e.g. "md.comp.filled-button")
-            name   — human-readable name (e.g. "Filled Button")
-            tokens — flat key/value dict of design tokens, e.g.:
-                       "container-height": "40px"
-                       "container-color":  "#6750a4"
-                       "container-shape":  "9999px"
-                       "label-text-font":  "Roboto"
-                       "label-text-size":  "0.875rem"
-                     Token keys follow the pattern {element}-{property}.
-                     Common properties: color, height, width, shape, font,
-                     size, weight, line-height, tracking, elevation, opacity.
-                     States are prefixed: hover-, focused-, pressed-, disabled-.
+          The CI pipeline has already called the Design Tokens API (backed by GCS) and
+          committed the result to demo/ds-catalog.json on this branch.
+          Your job is to verify the file is in place and log what was found.
 
           ── STEPS ──────────────────────────────────────────────────────────────
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
             Note source_branch.
 
-          Step 2: Call list_repository_tree (project_id, ref=source_branch,
-            path="demo/figma-exports"). Find the .json filename.
+          Step 2: Call get_repository_file (project_id, "demo/ds-catalog.json",
+            ref=source_branch). Base64-decode.
 
-          Step 3: Call get_repository_file for that file (ref=source_branch).
-            Base64-decode. Read the "designSystem" field at the root.
-            The field has: { name, slug, type, ... }
-            - "name" (e.g. "Material Design 3") — human-readable, use in review text
-            - "slug" (e.g. "md3") — use directly as the API ?system= param
+            Case A — File exists AND components array is non-empty:
+              Log: "✅ Catalog ready: <len(components)> components for <design_system_name>"
+              No further action. Proceed to the next agent.
 
-          Step 4: Use designSystem.slug directly as the slug for the API call.
-            If slug is null or missing, set slug = null.
+            Case B — File exists BUT components array is empty:
+              Log the warning field from the file.
+              No further action. The classifier will use built-in rules.
 
-          Step 5: If slug is not null:
-            Call GET <BASE_URL>?system=<slug>&resource=components
-            Parse the response. Use the "components" array.
-            If the API call fails, use an empty components array.
+            Case C — File does not exist (CI job has not finished yet):
+              Call create_commit:
+                branch: source_branch
+                commit_message: "chore: ds component catalog fallback [skip ci]"
+                actions:
+                  - action: "create"
+                    file_path: "demo/ds-catalog.json"
+                    content: {
+                      "design_system_name": null,
+                      "slug": null,
+                      "components": [],
+                      "warning": "CI pipeline did not populate the catalog in time. The classifier will use built-in rules."
+                    }
 
-          Step 6: Call create_commit:
-            project_id: {{project_id}}
-            branch: <source_branch>
-            commit_message: "chore: ds component catalog [skip ci]"
-            actions:
-              - action: "create"
-                file_path: "demo/ds-catalog.json"
-                content: <JSON string with this shape>
-
-          Shape of demo/ds-catalog.json:
-          {
-            "design_system_name": "<name from Figma export designSystem.name>",
-            "slug": "<slug or null>",
-            "components": [
-              {
-                "id": "md.comp.filled-button",
-                "name": "Filled Button",
-                "tokens": {
-                  "container-height": "40px",
-                  "container-color": "#6750a4",
-                  "container-shape": "9999px",
-                  "label-text-color": "#fff",
-                  "label-text-font": "Roboto",
-                  "label-text-size": "0.875rem"
-                }
-              }
-            ]
-          }
-
-          Store the components array exactly as returned by the API — do not
-          reshape or filter it. The classifier will read token values directly.
-
-          If no design system was selected or the API is unreachable, commit:
-          {
-            "design_system_name": null,
-            "slug": null,
-            "components": [],
-            "warning": "No design system found in Figma export. The classifier will use built-in MD3 rules."
-          }
+          Do NOT call any external API. The catalog is fetched by the CI pipeline,
+          not by this agent.
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
         placeholder: history
       unit_primitives: []
       params:
-        timeout: 120
+        timeout: 60
 
     # ──────────────────────────────────────────────────────────────────────────
     # 3. COMPONENT CLASSIFIER
