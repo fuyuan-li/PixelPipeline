@@ -131,7 +131,7 @@ def _try_github_fetch():
 
 
 def scrape():
-    """Return normalised M3 token list."""
+    """Return normalised M3 data: component catalog (primary) + tokens (supplementary)."""
     tokens = _try_github_fetch()
 
     source = "material-foundation/material-tokens (GitHub)"
@@ -144,9 +144,172 @@ def scrape():
             tokens.append({"name": name, "value": value, "type": "FLOAT", "group": "typography"})
 
     return {
-        "system":  "Material Design 3",
-        "slug":    "md3",
-        "version": "baseline-light",
-        "source":  source,
-        "tokens":  tokens,
+        "system":     "Material Design 3",
+        "slug":       "md3",
+        "version":    "baseline-light",
+        "source":     source,
+        # Component catalog — primary data for the DS Migration pipeline.
+        # Each entry describes a UI component, its variants, and the structural
+        # signals the Component Classifier uses to recognise raw Figma shapes.
+        "components": MD3_COMPONENTS,
+        # Tokens retained for reference / future use.
+        "tokens":     tokens,
     }
+
+
+# ── MD3 Component Catalog ─────────────────────────────────────────────────────
+# Curated from https://m3.material.io/components
+# detection rules are used by the Component Classifier agent to infer the
+# semantic type of raw FRAME / RECTANGLE nodes in the Figma export.
+
+MD3_COMPONENTS = [
+    {
+        "name":             "Button",
+        "category":         "action",
+        "description":      "Buttons help people initiate actions.",
+        "figma_search_name": "Button",
+        "variants": [
+            {"name": "Filled Button",   "figma_name": "Button/Filled Button"},
+            {"name": "Outlined Button", "figma_name": "Button/Outlined Button"},
+            {"name": "Text Button",     "figma_name": "Button/Text Button"},
+            {"name": "Elevated Button", "figma_name": "Button/Elevated Button"},
+            {"name": "Tonal Button",    "figma_name": "Button/Filled Tonal Button"},
+        ],
+        "detection": {
+            "name_keywords":       ["button", "btn", "cta", "action", "submit", "confirm"],
+            "node_types":          ["FRAME", "RECTANGLE"],
+            "height_range":        [32, 56],
+            "max_width":           240,
+            "requires_text_child": True,
+            "notes": "Frame 32–56px tall, ≤240px wide, with a TEXT child.",
+        },
+    },
+    {
+        "name":             "List Item",
+        "category":         "containment",
+        "description":      "Lists display a continuous, vertical index of text or images.",
+        "figma_search_name": "List Item",
+        "variants": [
+            {"name": "1-line", "figma_name": "Lists/1-line item"},
+            {"name": "2-line", "figma_name": "Lists/2-line item"},
+            {"name": "3-line", "figma_name": "Lists/3-line item"},
+        ],
+        "detection": {
+            "name_keywords":       ["song", "track", "item", "row", "list", "entry", "music"],
+            "node_types":          ["FRAME"],
+            "height_range":        [48, 88],
+            "min_width":           200,
+            "requires_text_child": True,
+            "notes": "Full-width frame (≥200px), 48–88px tall, repeating as siblings.",
+        },
+    },
+    {
+        "name":             "Navigation Bar",
+        "category":         "navigation",
+        "description":      "Navigation bars offer a persistent way to switch between primary destinations.",
+        "figma_search_name": "Navigation Bar",
+        "variants": [
+            {"name": "Navigation Bar", "figma_name": "Navigation Bar/Navigation Bar"},
+        ],
+        "detection": {
+            "name_keywords": ["nav bar", "navigation", "tab bar", "bottom nav",
+                              "section 4", "navbar"],
+            "node_types":    ["FRAME"],
+            "height_range":  [56, 96],
+            "min_width":     300,
+            "notes": "Full-width frame (≥300px), 56–96px tall. 3–5 icon+label destinations.",
+        },
+    },
+    {
+        "name":             "Divider",
+        "category":         "containment",
+        "description":      "Dividers are thin lines that group content in lists and layouts.",
+        "figma_search_name": "Divider",
+        "variants": [
+            {"name": "Full-width Divider", "figma_name": "Divider/Divider"},
+            {"name": "Inset Divider",      "figma_name": "Divider/Inset divider"},
+        ],
+        "detection": {
+            "name_keywords": ["rectangle", "divider", "separator", "line", "hr"],
+            "node_types":    ["RECTANGLE", "FRAME", "LINE"],
+            "max_height":    4,
+            "min_width":     100,
+            "notes": "Thin element (height ≤ 4px, width > 100px). Raw RECTANGLE used as separator.",
+        },
+    },
+    {
+        "name":             "Card",
+        "category":         "containment",
+        "description":      "Cards contain content and actions about a single subject.",
+        "figma_search_name": "Card",
+        "variants": [
+            {"name": "Filled Card",   "figma_name": "Cards/Filled card"},
+            {"name": "Outlined Card", "figma_name": "Cards/Outlined card"},
+            {"name": "Elevated Card", "figma_name": "Cards/Elevated card"},
+        ],
+        "detection": {
+            "name_keywords":     ["card", "tile", "panel"],
+            "node_types":        ["FRAME"],
+            "min_corner_radius": 8,
+            "notes": "Frame with cornerRadius ≥ 8, containing headline text.",
+        },
+    },
+    {
+        "name":             "Top App Bar",
+        "category":         "navigation",
+        "description":      "Top app bars display navigation and actions for the current screen.",
+        "figma_search_name": "Top App Bar",
+        "variants": [
+            {"name": "Center-aligned", "figma_name": "Top app bar/Center-aligned"},
+            {"name": "Small",          "figma_name": "Top app bar/Small"},
+            {"name": "Medium",         "figma_name": "Top app bar/Medium"},
+            {"name": "Large",          "figma_name": "Top app bar/Large"},
+        ],
+        "detection": {
+            "name_keywords": ["top bar", "app bar", "header", "toolbar",
+                              "section 1", "section 2", "section 3"],
+            "node_types":    ["FRAME"],
+            "height_range":  [56, 152],
+            "min_width":     300,
+            "notes": "Full-width frame at top of screen, 56–152px tall.",
+        },
+    },
+    {
+        "name":             "Chip",
+        "category":         "action",
+        "description":      "Chips help people enter information, make selections, or trigger actions.",
+        "figma_search_name": "Chip",
+        "variants": [
+            {"name": "Assist Chip",     "figma_name": "Chips/Assist chip"},
+            {"name": "Filter Chip",     "figma_name": "Chips/Filter chip"},
+            {"name": "Input Chip",      "figma_name": "Chips/Input chip"},
+            {"name": "Suggestion Chip", "figma_name": "Chips/Suggestion chip"},
+        ],
+        "detection": {
+            "name_keywords": ["chip", "tag", "badge", "filter", "pill"],
+            "node_types":    ["FRAME"],
+            "height_range":  [28, 40],
+            "max_width":     160,
+            "notes": "Small rounded frame (28–40px tall), label + optional icon.",
+        },
+    },
+    {
+        "name":             "FAB",
+        "category":         "action",
+        "description":      "The FAB represents the most important action on a screen.",
+        "figma_search_name": "FAB",
+        "variants": [
+            {"name": "FAB",          "figma_name": "FAB/FAB"},
+            {"name": "Small FAB",    "figma_name": "FAB/Small FAB"},
+            {"name": "Large FAB",    "figma_name": "FAB/Large FAB"},
+            {"name": "Extended FAB", "figma_name": "FAB/Extended FAB"},
+        ],
+        "detection": {
+            "name_keywords": ["fab", "floating action", "primary action"],
+            "node_types":    ["FRAME"],
+            "height_range":  [40, 96],
+            "max_width":     200,
+            "notes": "Square/rounded frame (cornerRadius ≥ 12), contains an icon child.",
+        },
+    },
+]
