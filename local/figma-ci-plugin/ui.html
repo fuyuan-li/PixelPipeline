@@ -446,6 +446,51 @@
     }, '*');
   }
 
+  // ─── Poll CI pipeline, then post @mention ────────────────────────────────
+  // The fetch-design-tokens CI job must commit ds-catalog.json before the AI
+  // flow starts. We watch the pipeline and post the @mention only when it
+  // succeeds (or fails/times out — so the flow always starts eventually).
+  async function waitForPipelineAndMention(api, h, projectId, mrIid) {
+    const INTERVAL  = 6000;   // 6 s between polls
+    const MAX_POLLS = 20;     // ~2 min max wait
+
+    // ── wait for a pipeline to appear on the MR ──────────────────────────
+    let pipelineId = null;
+    for (let i = 0; i < MAX_POLLS; i++) {
+      setStatus('submitStatus', `⏳ Waiting for CI pipeline… (${i * 6}s)`, 'info');
+      await new Promise(r => setTimeout(r, INTERVAL));
+      try {
+        const res      = await fetch(`${api}/projects/${projectId}/merge_requests/${mrIid}/pipelines`, { headers: h });
+        const list     = res.ok ? await res.json() : [];
+        if (list.length > 0) { pipelineId = list[0].id; break; }
+      } catch (_) {}
+    }
+
+    if (!pipelineId) {
+      // No pipeline found — post @mention anyway so review isn't blocked.
+      setStatus('submitStatus', '⚠️ No CI pipeline detected — triggering review now.', 'info');
+    } else {
+      // ── poll pipeline status until terminal ──────────────────────────
+      for (let i = 0; i < MAX_POLLS; i++) {
+        try {
+          const res      = await fetch(`${api}/projects/${projectId}/pipelines/${pipelineId}`, { headers: h });
+          const pipeline = res.ok ? await res.json() : {};
+          const status   = pipeline.status || '';
+          if (['success', 'failed', 'canceled', 'skipped'].includes(status)) break;
+        } catch (_) {}
+        setStatus('submitStatus', `⏳ CI pipeline running… (${i * 6}s)`, 'info');
+        await new Promise(r => setTimeout(r, INTERVAL));
+      }
+    }
+
+    // ── post @mention to trigger AI flow ─────────────────────────────────
+    setStatus('submitStatus', '🤖 Triggering review flow…', 'info');
+    await fetch(`${api}/projects/${projectId}/merge_requests/${mrIid}/notes`, {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ body: `@${FLOW_ACCOUNT} please review this design update.` }),
+    });
+  }
+
   async function runGitLabFlow(figmaPayload) {
     const v   = getSubmitValues();
     const api = `${GITLAB_BASE_URL}/api/v4`;
@@ -508,8 +553,6 @@
         `| **Snapshot** | \`${fileName}\` |`,
         '',
         `---`,
-        '',
-        `@${FLOW_ACCOUNT} please review this design update.`,
       ].join('\n');
 
       setStatus('submitStatus', '📬 Creating MR…');
@@ -524,17 +567,20 @@
       if (!mrRes.ok) throw new Error(`MR creation failed (${mrRes.status})`);
       const mr = await mrRes.json();
 
-      setStatus('submitStatus', '🤖 Triggering review flow…');
-      await fetch(`${api}/projects/${project.id}/merge_requests/${mr.iid}/notes`, {
-        method: 'POST', headers: h,
-        body: JSON.stringify({ body: `@${FLOW_ACCOUNT} please review this design update.` }),
-      });
-
       parent.postMessage({ pluginMessage: { type: 'save-review-ref', branch: reviewBranch, mrIid: mr.iid } }, '*');
       document.getElementById('reviewBranch').value = reviewBranch;
 
       setStatusHTML('submitStatus',
-        `✅ MR created! <a href="${mr.web_url}" target="_blank">View !${mr.iid} ↗</a>
+        `✅ MR <a href="${mr.web_url}" target="_blank">!${mr.iid} ↗</a> created.`,
+        'success'
+      );
+
+      // Wait for the fetch-design-tokens CI job to commit ds-catalog.json,
+      // then post the @mention so the AI flow always starts with data ready.
+      await waitForPipelineAndMention(api, h, project.id, mr.iid);
+
+      setStatusHTML('submitStatus',
+        `✅ MR <a href="${mr.web_url}" target="_blank">!${mr.iid} ↗</a> — review triggered!
          <br><span style="color:#aaa">Switch to Apply Fixes tab once the review is done.</span>`,
         'success'
       );
