@@ -143,11 +143,18 @@ definition:
           Do NOT guess or hardcode it.
 
           Each component in the response has:
-            name              — human-readable name (e.g. "Button")
-            figma_search_name — keyword to find it in Figma library (e.g. "Button")
-            variants          — list of { name, figma_name } (e.g. "Filled Button")
-            detection         — rules the classifier uses to recognise this component
-                                (name_keywords, height_range, node_types, notes)
+            id     — dot-notation identifier (e.g. "md.comp.filled-button")
+            name   — human-readable name (e.g. "Filled Button")
+            tokens — flat key/value dict of design tokens, e.g.:
+                       "container-height": "40px"
+                       "container-color":  "#6750a4"
+                       "container-shape":  "9999px"
+                       "label-text-font":  "Roboto"
+                       "label-text-size":  "0.875rem"
+                     Token keys follow the pattern {element}-{property}.
+                     Common properties: color, height, width, shape, font,
+                     size, weight, line-height, tracking, elevation, opacity.
+                     States are prefixed: hover-, focused-, pressed-, disabled-.
 
           ── STEPS ──────────────────────────────────────────────────────────────
 
@@ -186,21 +193,22 @@ definition:
             "slug": "<slug or null>",
             "components": [
               {
-                "name": "Button",
-                "figma_search_name": "Button",
-                "variants": [
-                  { "name": "Filled Button", "figma_name": "Button/Filled Button" },
-                  { "name": "Outlined Button", "figma_name": "Button/Outlined Button" }
-                ],
-                "detection": {
-                  "name_keywords": ["button", "btn"],
-                  "node_types": ["FRAME"],
-                  "height_range": [32, 56],
-                  "notes": "Frame with height 32–56px, contains TEXT child"
+                "id": "md.comp.filled-button",
+                "name": "Filled Button",
+                "tokens": {
+                  "container-height": "40px",
+                  "container-color": "#6750a4",
+                  "container-shape": "9999px",
+                  "label-text-color": "#fff",
+                  "label-text-font": "Roboto",
+                  "label-text-size": "0.875rem"
                 }
               }
             ]
           }
+
+          Store the components array exactly as returned by the API — do not
+          reshape or filter it. The classifier will read token values directly.
 
           If no design system was selected or the API is unreachable, commit:
           {
@@ -307,9 +315,13 @@ definition:
 
           Matching logic:
             1. Exact name match: semantic_type === component.name
-            2. Variant-level match: if semantic_type includes a variant hint
-               (e.g. "Primary Button" → "Filled Button" variant)
-            3. Fallback: pick the first/default variant of the matched component
+            2. Partial name match: component.name contains semantic_type keyword
+               (e.g. semantic_type "Button" matches "Filled Button", "Outlined Button")
+               — prefer the most specific match; if ambiguous, prefer the Filled variant
+            3. Use component.tokens for additional signals:
+               - container-height token should roughly match the node's height
+               - container-shape: "9999px" → pill/circular; low px → rectangular
+            4. Fallback: pick the component whose name most closely matches
 
           ── STEPS ───────────────────────────────────────────────────────────────
 
@@ -358,8 +370,8 @@ definition:
                 "semantic_type":         "Navigation Bar",
                 "inference_reason":      "Full-width FRAME (375×80px) with 3 children each containing icon+text. Name 'Section 4' also matches nav pattern.",
                 "source_component":      null,
-                "target_component_name": "Navigation Bar/Navigation Bar",
-                "figma_search_name":     "Navigation Bar",
+                "target_component_id":   "md.comp.navigation-bar",
+                "target_component_name": "Navigation Bar",
                 "confidence":            "high"
               },
               {
@@ -372,8 +384,8 @@ definition:
                 "semantic_type":         "Filled Button",
                 "inference_reason":      "mainComponentName = 'Button/Filled button' — direct instance identification.",
                 "source_component":      "Button/Filled button",
-                "target_component_name": "Button/Filled Button",
-                "figma_search_name":     "Button",
+                "target_component_id":   "md.comp.filled-button",
+                "target_component_name": "Filled Button",
                 "confidence":            "high"
               },
               {
@@ -386,8 +398,8 @@ definition:
                 "semantic_type":         "Divider",
                 "inference_reason":      "RECTANGLE with height=1px and width=375px. Classic thin separator pattern.",
                 "source_component":      null,
-                "target_component_name": "Divider/Divider",
-                "figma_search_name":     "Divider",
+                "target_component_id":   "md.comp.divider",
+                "target_component_name": "Divider",
                 "confidence":            "high"
               }
             ]
@@ -433,12 +445,11 @@ definition:
                 "node_id":               "<from migration>",
                 "node_name":             "<from migration>",
                 "fix_type":              "component",
-                "property":              "component",
                 "case":                  "A" or "B",
                 "semantic_type":         "<from migration>",
                 "source_component":      "<from migration, or null>",
+                "target_component_id":   "<from migration>",
                 "target_component_name": "<from migration>",
-                "figma_search_name":     "<from migration>",
                 "node_width":            <number>,
                 "node_height":           <number>,
                 "confidence":            "<from migration>",
