@@ -33,3 +33,6 @@ npm-debug.log*
 *.pem
 *.key
 secrets.yml
+
+# local data
+tools/scraper/output/

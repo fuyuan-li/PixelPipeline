@@ -145,7 +145,9 @@ def scrape():
     """Return normalised Ant Design token list."""
     tokens = _try_github_fetch()
 
+    source = "ant-design/ant-design token-meta.json (GitHub)"
     if not tokens:
+        source = "curated fallback (GitHub unavailable)"
         for name, value in FALLBACK_COLORS.items():
             tokens.append({"name": name, "value": value, "type": "COLOR", "group": "color"})
         for name, value in FALLBACK_TYPOGRAPHY.items():
@@ -157,6 +159,6 @@ def scrape():
         "system":  "Ant Design",
         "slug":    "antd",
         "version": "v5",
-        "source":  "ant-design/ant-design token-meta.json (GitHub) or curated fallback",
+        "source":  source,
         "tokens":  tokens,
     }

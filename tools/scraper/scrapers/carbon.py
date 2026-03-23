@@ -175,7 +175,9 @@ def scrape():
     """Return normalised Carbon token list."""
     tokens = _try_github_fetch()
 
+    source = "carbon-design-system/carbon (GitHub)"
     if not tokens:
+        source = "curated fallback (GitHub unavailable)"
         for name, value in FALLBACK_COLORS.items():
             tokens.append({"name": name, "value": value, "type": "COLOR", "group": _infer_group(name)})
         for name, value in FALLBACK_SPACING.items():
@@ -187,6 +189,6 @@ def scrape():
         "system":  "Carbon Design System",
         "slug":    "carbon",
         "version": "white-theme",
-        "source":  "carbon-design-system/carbon (GitHub) or curated fallback",
+        "source":  source,
         "tokens":  tokens,
     }

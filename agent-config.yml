@@ -1,8 +1,5 @@
 network_policy:
   include_recommended_allowed: true
   allowed_domains:
-    - m3.material.io
-    - "*.material.io"
-    - developer.apple.com/design/human-interface-guidelines
-    # Design Tokens API (Cloud Function — update region/project after deployment)
-    - "*.cloudfunctions.net"
+    # Design Tokens API (Gen 2 Cloud Function runs on Cloud Run)
+    - "*.run.app"

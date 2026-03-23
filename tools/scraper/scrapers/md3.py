@@ -14,10 +14,12 @@ import re
 import json
 import requests
 
-GITHUB_API   = "https://api.github.com/repos/material-foundation/material-tokens/contents"
-GITHUB_RAW   = "https://raw.githubusercontent.com/material-foundation/material-tokens/main"
-HEADERS      = {"Accept": "application/vnd.github.v3+json", "User-Agent": "figma-ci-scraper/1.0"}
-TIMEOUT      = 15
+GITHUB_RAW = "https://raw.githubusercontent.com/material-foundation/material-tokens/main"
+HEADERS    = {"User-Agent": "figma-ci-scraper/1.0"}
+TIMEOUT    = 15
+
+# DSP tokens.json: flat list of entities with type/id/value
+DSP_TOKENS_URL = f"{GITHUB_RAW}/dsp/data/tokens.json"
 
 # ── Fallback: M3 Baseline Light Scheme ────────────────────────────────────────
 # Source: https://m3.material.io/styles/color/static-color-schemes
@@ -85,46 +87,44 @@ FALLBACK_TYPOGRAPHY = {
 }
 
 
-def _parse_w3c_tokens(obj, prefix=""):
-    """Recursively parse W3C design tokens format { name: { $value, $type } }."""
-    tokens = []
-    for key, val in obj.items():
-        full_key = f"{prefix}.{key}" if prefix else key
-        if isinstance(val, dict):
-            if "$value" in val:
-                t = val.get("$type", "").upper()
-                raw = val["$value"]
-                value = raw if isinstance(raw, str) else str(raw)
-                tokens.append({
-                    "name":  full_key,
-                    "value": value,
-                    "type":  "COLOR" if t in ("COLOR", "COLOUR") or value.startswith("#") else "FLOAT" if t == "NUMBER" else "STRING",
-                    "group": full_key.split(".")[2] if full_key.count(".") >= 2 else "misc",
-                })
-            else:
-                tokens.extend(_parse_w3c_tokens(val, full_key))
-    return tokens
+def _hex8_to_hex6(value: str) -> str:
+    """Convert #rrggbbaa → #rrggbb (strip alpha)."""
+    v = value.strip()
+    if v.startswith("#") and len(v) == 9:
+        return v[:7]
+    return v
 
 
 def _try_github_fetch():
-    """Attempt to list and fetch token JSON files from the GitHub repo."""
+    """Fetch tokens from material-foundation/material-tokens DSP format."""
     tokens = []
     try:
-        resp = requests.get(f"{GITHUB_API}/tokens", headers=HEADERS, timeout=TIMEOUT)
+        resp = requests.get(DSP_TOKENS_URL, headers=HEADERS, timeout=TIMEOUT)
         resp.raise_for_status()
-        files = resp.json()
-        json_files = [f for f in files if f["name"].endswith(".json") and "color" in f["name"].lower()]
-        if not json_files:
-            json_files = [f for f in files if f["name"].endswith(".json")][:5]
-
-        for f in json_files:
-            try:
-                raw = requests.get(f["download_url"], headers=HEADERS, timeout=TIMEOUT)
-                raw.raise_for_status()
-                data = raw.json()
-                tokens.extend(_parse_w3c_tokens(data))
-            except Exception:
+        data = resp.json()
+        entities = data.get("entities", [])
+        for e in entities:
+            if not isinstance(e, dict) or e.get("class") != "token":
                 continue
+            tok_type = e.get("type", "").lower()
+            name     = e.get("id") or e.get("name", "")
+            value    = str(e.get("value", "")).strip()
+            if not name or not value:
+                continue
+            if tok_type == "color":
+                tokens.append({
+                    "name":  name,
+                    "value": _hex8_to_hex6(value),
+                    "type":  "COLOR",
+                    "group": name.split(".")[2] if name.count(".") >= 2 else "color",
+                })
+            elif tok_type in ("number", "float", "dimension"):
+                tokens.append({
+                    "name":  name,
+                    "value": value,
+                    "type":  "FLOAT",
+                    "group": name.split(".")[2] if name.count(".") >= 2 else "misc",
+                })
     except Exception:
         pass
     return tokens
@@ -134,8 +134,9 @@ def scrape():
     """Return normalised M3 token list."""
     tokens = _try_github_fetch()
 
+    source = "material-foundation/material-tokens (GitHub)"
     if not tokens:
-        # Build from curated fallback
+        source = "curated fallback (GitHub unavailable)"
         for name, value in FALLBACK_COLORS.items():
             group = name.split(".")[2] if name.count(".") >= 2 else "color"
             tokens.append({"name": name, "value": value, "type": "COLOR", "group": group})
@@ -146,6 +147,6 @@ def scrape():
         "system":  "Material Design 3",
         "slug":    "md3",
         "version": "baseline-light",
-        "source":  "material-foundation/material-tokens (GitHub) or curated fallback",
+        "source":  source,
         "tokens":  tokens,
     }

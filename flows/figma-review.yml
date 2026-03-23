@@ -108,8 +108,7 @@ definition:
           commit it as a standards file for downstream agents to use.
 
           DESIGN TOKENS API
-          Base URL: https://REGION-PROJECT.cloudfunctions.net/design-tokens-api
-          (Replace with the deployed Cloud Function URL after setup)
+          Base URL: https://design-tokens-api-sdzot2fiaq-uc.a.run.app
 
           Supported systems and their slugs:
             "Material Design 3"       → md3
@@ -185,7 +184,8 @@ definition:
           file_path="demo/design-system-standards.json", ref=source_branch).
           Base64-decode to get the design system standards.
           Read the "variables" array — these are the available tokens
-          (each has: key, name, resolvedType).
+          (each has: name, value, type, group).
+          Also note the top-level "name" and "slug" fields.
           If the file has an "error" field, note it and continue without token validation.
 
           Step 4: Call list_repository_tree (project_id, ref=source_branch,
@@ -223,7 +223,7 @@ definition:
           The JSON to commit:
           {
             "generated_at": "<ISO timestamp>",
-            "design_system": "<name> / <collectionName from standards file>",
+            "design_system": "<name> (<slug>) from standards file",
             "summary": {
               "total_nodes_reviewed": N,
               "tokens_bound": N,
