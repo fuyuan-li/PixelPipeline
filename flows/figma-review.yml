@@ -1,5 +1,21 @@
-name: "Figma Design Review"
-description: "Triggered when @mentioned on a merge request created by the Figma GitLab plugin. Reviews the design against the selected design system and suggests component-level fixes."
+name: "Figma Design System Migration"
+description: |
+  Triggered when @mentioned on a merge request created by the Figma GitLab plugin.
+
+  This pipeline performs a Design System Migration review:
+  it reads the committed Figma export, semantically infers what each element IS
+  (button, nav bar, list item, divider, etc.) regardless of whether it is already
+  a library component or a raw shape, then maps every element to the equivalent
+  component in the target design system (e.g. MD3).
+
+  Two cases handled:
+    1. Node is already an INSTANCE  → read mainComponentName to identify it,
+       find the equivalent component in the target DS, flag for replacement.
+    2. Node is a raw FRAME / GROUP / RECTANGLE  → infer semantic type from
+       dimensions, name keywords, and child structure, then map to the target DS.
+
+  The output is a machine-readable Fix Spec that the Figma CI plugin applies
+  to replace every element with the correct library component in one click.
 public: true
 definition:
   version: v1
@@ -19,9 +35,9 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
-    - name: "design_system_agent"
+    - name: "ds_catalog_agent"
       type: AgentComponent
-      prompt_id: "design_system_prompt"
+      prompt_id: "ds_catalog_prompt"
       inputs:
         - "context:goal"
         - "context:project_id"
@@ -34,9 +50,9 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
-    - name: "design_auditor"
+    - name: "component_classifier"
       type: AgentComponent
-      prompt_id: "design_auditor_prompt"
+      prompt_id: "component_classifier_prompt"
       inputs:
         - "context:goal"
         - "context:project_id"
@@ -49,24 +65,9 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
-    - name: "component_auditor"
+    - name: "migration_writer"
       type: AgentComponent
-      prompt_id: "component_auditor_prompt"
-      inputs:
-        - "context:goal"
-        - "context:project_id"
-      toolset:
-        - get_merge_request
-        - list_repository_tree
-        - get_repository_file
-        - create_commit
-      ui_log_events:
-        - on_agent_final_answer
-        - on_tool_execution_success
-
-    - name: "review_writer"
-      type: AgentComponent
-      prompt_id: "review_writer_prompt"
+      prompt_id: "migration_writer_prompt"
       inputs:
         - "context:goal"
         - "context:project_id"
@@ -80,34 +81,39 @@ definition:
 
   routers:
     - from: "intake"
-      to: "design_system_agent"
-    - from: "design_system_agent"
-      to: "design_auditor"
-    - from: "design_auditor"
-      to: "component_auditor"
-    - from: "component_auditor"
-      to: "review_writer"
-    - from: "review_writer"
+      to: "ds_catalog_agent"
+    - from: "ds_catalog_agent"
+      to: "component_classifier"
+    - from: "component_classifier"
+      to: "migration_writer"
+    - from: "migration_writer"
       to: "end"
 
   flow:
     entry_point: "intake"
 
   prompts:
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 1. INTAKE
+    # ──────────────────────────────────────────────────────────────────────────
     - prompt_id: "intake_prompt"
-      name: "Intake Prompt"
+      name: "Intake"
       prompt_template:
         system: |
-          You are the Intake agent for the Figma Design Review pipeline.
-          You receive the designer's submission and confirm the review has started.
+          You are the Intake agent for the Design System Migration pipeline.
 
-          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+          Step 1: Parse merge_request_iid from goal context:
+            Goal looks like: "... Context: {MergeRequest IID: N}"
+            Extract N as the merge_request_iid.
 
-          Step 2: Call get_merge_request (project_id, merge_request_iid) to confirm the
-          MR exists and note source_branch.
+          Step 2: Call get_merge_request (project_id, merge_request_iid).
+            Confirm the MR exists. Note source_branch.
 
-          Step 3: Call create_merge_request_note posting exactly:
-          "⏳ Design review started — analysing against design system…"
+          Step 3: Call create_merge_request_note with body:
+            "⏳ Design system migration analysis started…"
+
+          Do NOT ask the user for anything.
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -116,88 +122,94 @@ definition:
       params:
         timeout: 60
 
-    - prompt_id: "design_system_prompt"
-      name: "Design System Agent Prompt"
+    # ──────────────────────────────────────────────────────────────────────────
+    # 2. DS CATALOG AGENT
+    #    Fetches the component catalog for the target design system and saves it
+    #    as demo/ds-catalog.json so the classifier can use it.
+    # ──────────────────────────────────────────────────────────────────────────
+    - prompt_id: "ds_catalog_prompt"
+      name: "Design System Catalog Agent"
       prompt_template:
         system: |
-          You are the Design System Agent for the Figma Design Review pipeline.
-          Your job is to fetch BOTH token data AND component specs from the Design Tokens API,
-          then commit them as a standards file for downstream agents to use.
+          You are the Design System Catalog Agent for the Design System Migration pipeline.
+          Your job is to fetch the component catalog of the TARGET design system
+          so the next agent knows which components are available to map elements into.
 
-          DESIGN TOKENS API
+          ── DESIGN TOKENS API ──────────────────────────────────────────────────
           Base URL: https://design-tokens-api-sdzot2fiaq-uc.a.run.app
+          Endpoint: GET <BASE_URL>?system=<slug>&resource=components
 
-          Supported systems and their slugs:
-            "Material Design 3"       → md3
-            "Ant Design"              → antd
-            "Carbon Design System"    → carbon
+          Slug mapping:
+            "Material Design 3" / "MD3" / anything containing "Material"  → md3
+            "Ant Design" / "Ant"                                           → antd
+            "Carbon Design System" / "IBM" / "Carbon"                     → carbon
 
-          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+          Each component in the response has:
+            name              — human-readable name (e.g. "Button")
+            figma_search_name — keyword to find it in Figma library (e.g. "Button")
+            variants          — list of { name, figma_name } (e.g. "Filled Button")
+            detection         — rules the classifier uses to recognise this component
+                                (name_keywords, height_range, node_types, notes)
 
-          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
+          ── STEPS ──────────────────────────────────────────────────────────────
 
-          Step 3: Call list_repository_tree (project_id, ref=source_branch,
-          path="demo/figma-exports"). Find the .json filename.
+          Step 1: Parse merge_request_iid from goal. Call get_merge_request.
+            Note source_branch.
 
-          Step 4: Call get_repository_file (project_id,
-          file_path="demo/figma-exports/<filename>", ref=source_branch).
-          Base64-decode. Read designSystem.name from the root.
+          Step 2: Call list_repository_tree (project_id, ref=source_branch,
+            path="demo/figma-exports"). Find the .json filename.
 
-          Step 5: Map designSystem.name to a slug:
-            - Contains "Material" or "MD3" or "Google"   → md3
-            - Contains "Ant"                             → antd
-            - Contains "Carbon" or "IBM"                 → carbon
-            - Anything else                              → no slug (skip API call)
+          Step 3: Call get_repository_file for that file (ref=source_branch).
+            Base64-decode. Read the "designSystem" field at the root.
+            The field has: { name, type, ... }
+            The "name" field (e.g. "Material 3 Design Kit") tells you which DS.
 
-          Step 6: If a slug was found, make TWO API calls:
+          Step 4: Map the design system name to a slug (see mapping above).
+            If no slug can be determined, set slug = null.
 
-            6a. Fetch color tokens:
-                GET <BASE_URL>?system=<slug>&resource=tokens&type=COLOR
-                Parse the JSON. Use the "tokens" array.
+          Step 5: If slug is not null:
+            Call GET <BASE_URL>?system=<slug>&resource=components
+            Parse the response. Use the "components" array.
+            If the API call fails, use an empty components array.
 
-            6b. Fetch component specs:
-                GET <BASE_URL>?system=<slug>&resource=components
-                Parse the JSON. Use the "components" array.
-
-            If either API call fails or returns an error, use [] for that field.
-
-          Step 7: Call create_commit with:
+          Step 6: Call create_commit:
             project_id: {{project_id}}
-            branch: source_branch
-            commit_message: "chore: design system standards [skip ci]"
-            actions: [{
-              action: "create",
-              file_path: "demo/design-system-standards.json",
-              content: <JSON string — see format below>
-            }]
+            branch: <source_branch>
+            commit_message: "chore: ds component catalog [skip ci]"
+            actions:
+              - action: "create"
+                file_path: "demo/ds-catalog.json"
+                content: <JSON string with this shape>
 
-          Format of demo/design-system-standards.json:
+          Shape of demo/ds-catalog.json:
           {
-            "name":           "<designSystem.name from Figma export>",
-            "slug":           "<slug or null>",
-            "token_source":   "Design Tokens API" or "none",
-            "variables": [
-              { "name": "md.sys.color.primary", "value": "#6750A4", "type": "COLOR", "group": "color" }
-            ],
+            "design_system_name": "<name from Figma export designSystem.name>",
+            "slug": "<slug or null>",
             "components": [
               {
                 "name": "Button",
                 "figma_search_name": "Button",
                 "variants": [
-                  { "name": "Filled Button", "figma_name": "Button/Filled Button" }
+                  { "name": "Filled Button", "figma_name": "Button/Filled Button" },
+                  { "name": "Outlined Button", "figma_name": "Button/Outlined Button" }
                 ],
                 "detection": {
                   "name_keywords": ["button", "btn"],
                   "node_types": ["FRAME"],
                   "height_range": [32, 56],
-                  "notes": "..."
+                  "notes": "Frame with height 32–56px, contains TEXT child"
                 }
               }
             ]
           }
 
-          If designSystem is null/missing, commit:
-          { "error": "No design system selected.", "variables": [], "components": [] }
+          If no design system was selected or the API is unreachable, commit:
+          {
+            "design_system_name": null,
+            "slug": null,
+            "components": [],
+            "warning": "No design system found in Figma export. The classifier will use built-in MD3 rules."
+          }
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -206,204 +218,188 @@ definition:
       params:
         timeout: 120
 
-    - prompt_id: "design_auditor_prompt"
-      name: "Design Auditor Prompt"
+    # ──────────────────────────────────────────────────────────────────────────
+    # 3. COMPONENT CLASSIFIER
+    #    This is the core agent. It reads every node in the Figma export and
+    #    determines:
+    #      (a) What semantic component type this node IS
+    #      (b) Which component in the target DS best matches it
+    #    Then writes a component-migration-plan.json.
+    # ──────────────────────────────────────────────────────────────────────────
+    - prompt_id: "component_classifier_prompt"
+      name: "Component Classifier"
       prompt_template:
         system: |
-          You are the Design Auditor for the Figma Design Review pipeline.
-          You audit color usage — flagging detached colors and suggesting design token bindings.
-          (Component-level audit is handled by the separate Component Auditor agent.)
+          You are the Component Classifier for the Design System Migration pipeline.
+          This is the most important agent in the pipeline.
 
-          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+          Your job: read every node in the Figma export and answer two questions:
+            1. What semantic component type IS this node?  (e.g. "Primary Button")
+            2. What component in the target design system should REPLACE it?
 
-          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
+          You handle two cases:
 
-          Step 3: Call get_repository_file (project_id,
-          file_path="demo/design-system-standards.json", ref=source_branch).
-          Base64-decode to get the design system standards.
-          Read the "variables" array — these are the available color tokens
-          (each has: name, value, type, group).
-          Also note the top-level "name" and "slug" fields.
-          If the file has an "error" field, note it and continue without token validation.
+          CASE A — Already a library component (node.type === "INSTANCE")
+            Read node.mainComponentName. This tells you exactly what component it is.
+            Example: mainComponentName = "Button/Filled button" → this IS a Filled Button.
+            Find the equivalent in the target DS catalog.
+            Mark for replacement even if it is already "correct" — a DS migration means
+            ALL instances should be swapped to the new library's version.
 
-          Step 4: Call list_repository_tree (project_id, ref=source_branch,
-          path="demo/figma-exports"). Find the .json filename.
+          CASE B — Raw shape (FRAME, GROUP, RECTANGLE, not an INSTANCE)
+            Use the inference rules below to determine semantic type.
+            Then map to the best matching component in the target DS.
 
-          Step 5: Call get_repository_file (project_id,
-          file_path="demo/figma-exports/<filename>", ref=source_branch).
-          Base64-decode to get the Figma export JSON. Read the "nodes" array.
+          ── INFERENCE RULES FOR RAW SHAPES ─────────────────────────────────────
 
-          Step 6: Audit colors in the design:
+          Look at each node's: type, name, width, height, cornerRadius,
+          structural_summary (child_count, child_types, has_text_child,
+          has_icon_child, text_content), and position in the tree.
 
-          Traverse all nodes recursively.
-          For each node with fills or strokes of type SOLID:
-            - If fills[i].boundVariables.color has a value → token bound ✅, skip.
-            - If fills[i].boundVariables is empty ({}) → detached color ⚠️.
-              Convert the RGBA (0–1 floats) to #RRGGBB.
-              Find the closest matching variable from the standards "variables" list.
-              Use both name semantics AND color value proximity:
-                e.g. #FFFFFF → look for "on-primary", "background", or "surface" tokens
-                e.g. #000000 → look for "on-background", "on-surface" tokens
-                e.g. #D9D9D9 → look for "outline-variant", "surface-variant" tokens
-                e.g. #6750A4 → look for "primary" token
+          RULE: Divider
+            Trigger: (height ≤ 4 AND width > 60)
+            OR: name lowercased contains "rectangle" AND height ≤ 4
+            OR: node.type === "LINE"
+            → semantic_type: "Divider"
+            → Rationale: thin horizontal element used as visual separator
 
-          Step 7: Call create_commit with:
-            project_id: {{project_id}}
-            branch: source_branch
-            commit_message: "chore: design audit results [skip ci]"
-            actions: [{
-              action: "create",
-              file_path: "demo/audit-results.json",
-              content: <JSON string>
-            }]
+          RULE: Navigation Bar
+            Trigger: node.type === "FRAME" AND height between 56–96 AND width ≥ 300
+            AND (structural_summary.has_icon_child === true OR child_count ≥ 3)
+            AND (structural_summary.has_text_child === true)
+            OR: name lowercased contains "nav", "tab bar", "navigation", "section 4"
+            → semantic_type: "Navigation Bar"
+            → Rationale: full-width bar at bottom with icon+label destinations
 
-          The JSON to commit:
+          RULE: List Item / Song Row
+            Trigger: node.type === "FRAME" AND height between 48–88 AND width ≥ 200
+            AND structural_summary.has_text_child === true
+            AND (name lowercased contains "song", "track", "item", "row", "list", "music"
+                 OR this node has multiple siblings with the same shape)
+            → semantic_type: "List Item"
+            → Rationale: repeating row element with text content
+
+          RULE: Top App Bar / Header
+            Trigger: node.type === "FRAME" AND height between 48–112 AND width ≥ 300
+            AND node is at the TOP of its parent (low y value relative to siblings)
+            OR: name lowercased contains "header", "top bar", "app bar", "section 1", "section 2", "section 3"
+            → semantic_type: "Top App Bar"
+
+          RULE: Button
+            Trigger: node.type === "FRAME" AND height between 32–56 AND width between 64–240
+            AND structural_summary.has_text_child === true
+            OR: name lowercased contains "button", "btn", "cta"
+            → semantic_type: "Button"
+
+          RULE: Card
+            Trigger: node.type === "FRAME" AND cornerRadius ≥ 8
+            AND structural_summary.has_text_child === true
+            → semantic_type: "Card"
+
+          SKIP THESE (do not classify):
+            - Top-level device frame (e.g. "iPhone 13 & 14 - 2") — it is the canvas, not a component
+            - Pure TEXT nodes
+            - Nodes that are already a perfect INSTANCE of a target-DS component
+
+          ── MAPPING RULES ───────────────────────────────────────────────────────
+
+          After determining semantic_type, match it to the best component in
+          the ds-catalog.json components array.
+
+          Matching logic:
+            1. Exact name match: semantic_type === component.name
+            2. Variant-level match: if semantic_type includes a variant hint
+               (e.g. "Primary Button" → "Filled Button" variant)
+            3. Fallback: pick the first/default variant of the matched component
+
+          ── STEPS ───────────────────────────────────────────────────────────────
+
+          Step 1: Parse merge_request_iid from goal. Call get_merge_request. Note source_branch.
+
+          Step 2: Read ds-catalog.json:
+            Call get_repository_file (project_id, "demo/ds-catalog.json", ref=source_branch).
+            Base64-decode. This gives you the available target-DS components.
+
+          Step 3: Find and read the Figma export:
+            Call list_repository_tree (project_id, ref=source_branch, path="demo/figma-exports").
+            Call get_repository_file for the .json file.
+            Base64-decode. Read the "nodes" array.
+
+          Step 4: Traverse ALL nodes recursively.
+            For each node, apply Case A or Case B logic above.
+            Build a findings list.
+
+          Step 5: Commit the migration plan:
+            Call create_commit:
+              branch: source_branch
+              commit_message: "chore: component migration plan [skip ci]"
+              actions:
+                - action: "create"
+                  file_path: "demo/component-migration-plan.json"
+                  content: <JSON string>
+
+          Shape of demo/component-migration-plan.json:
           {
             "generated_at": "<ISO timestamp>",
-            "design_system": "<name> (<slug>) from standards file",
+            "target_design_system": "<design_system_name from ds-catalog>",
             "summary": {
-              "total_nodes_reviewed": N,
-              "tokens_bound": N,
-              "detached_colors": N
+              "total_nodes_scanned": N,
+              "existing_instances": N,
+              "raw_shapes_inferred": N,
+              "elements_to_migrate": N
             },
-            "findings": [
+            "migrations": [
               {
-                "node_id":         "123:456",
-                "node_name":       "Primary Button",
-                "property":        "fills",
-                "fill_index":      0,
-                "current_hex":     "#65558F",
-                "suggested_token": "md.sys.color.primary",
-                "target_hex":      "#6750A4",
-                "severity":        "warning",
-                "reason":          "Color #65558F is detached. Closest token: md.sys.color.primary (#6750A4)"
-              }
-            ]
-          }
-
-          If no color issues are found, commit with an empty findings array.
-        user: |
-          Project ID: {{project_id}}
-          Goal: {{goal}}
-        placeholder: history
-      unit_primitives: []
-      params:
-        timeout: 300
-
-    - prompt_id: "component_auditor_prompt"
-      name: "Component Auditor Prompt"
-      prompt_template:
-        system: |
-          You are the Component Auditor for the Figma Design Review pipeline.
-          Your job is to identify FRAME, GROUP, and RECTANGLE nodes that should be replaced
-          with proper library components from the design system.
-
-          You reason about the SEMANTIC PURPOSE of each node — not just its name.
-          A node named "Rectangle 4" with height=1 IS a Divider.
-          A node named "Section 4" with 3–5 icon+text children IS a Navigation Bar.
-          A node named "Song 1" that is a FRAME containing text and a thumbnail IS a List Item.
-
-          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
-
-          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
-
-          Step 3: Call get_repository_file (project_id,
-          file_path="demo/design-system-standards.json", ref=source_branch).
-          Base64-decode. Read the "components" array — these are the MD3 component specs
-          with detection rules (name_keywords, node_types, height_range, etc.).
-
-          Step 4: Call list_repository_tree (project_id, ref=source_branch,
-          path="demo/figma-exports"). Find the .json filename.
-
-          Step 5: Call get_repository_file (project_id,
-          file_path="demo/figma-exports/<filename>", ref=source_branch).
-          Base64-decode to get the Figma export JSON.
-
-          Step 6: Traverse all nodes recursively and apply these inference rules:
-
-          RULE 1 — Divider:
-            Match if: node.type is RECTANGLE or FRAME or LINE, AND
-              (node.height <= 4 OR (node.width > 100 AND node.height <= 4))
-            OR: node.name (lowercased) contains "rectangle" AND node.height <= 4
-            → Inferred component: "Divider", figma_search_name: "Divider"
-            → severity: "warning" (raw rectangles used as dividers don't support theming)
-
-          RULE 2 — List Item:
-            Match if: node.type is FRAME, AND
-              node.height is between 48 and 88, AND node.width >= 200, AND
-              node has at least one TEXT child (in immediate or nested children), AND
-              (node.name lowercased contains "song", "track", "item", "row", "list",
-               OR node appears multiple times with similar structure as siblings)
-            → Inferred component: "List Item", figma_search_name: "List Item"
-            → severity: "info"
-
-          RULE 3 — Navigation Bar:
-            Match if: node.type is FRAME, AND
-              node.height is between 56 and 96, AND node.width >= 300, AND
-              node has 3–5 children that each contain both a text element AND
-              an icon/vector/image element (horizontally arranged),
-              OR node.name (lowercased) contains "nav", "navigation", "tab bar", "section 4"
-            → Inferred component: "Navigation Bar", figma_search_name: "Navigation Bar"
-            → severity: "warning"
-
-          RULE 4 — Button:
-            Match if: node.type is FRAME or RECTANGLE, AND
-              node.height is between 32 and 56, AND node.width is between 64 and 240, AND
-              node has a TEXT child, AND
-              node.name (lowercased) contains "button", "btn", "cta", "action"
-            → Inferred component: "Button", figma_search_name: "Button"
-            → severity: "warning"
-
-          RULE 5 — Top App Bar:
-            Match if: node.type is FRAME, AND
-              node.height is between 56 and 112, AND node.width >= 300, AND
-              (node.name lowercased contains "section", "header", "top bar", "app bar",
-               OR it is positioned at the top of the screen (y <= 100))
-            → Inferred component: "Top App Bar", figma_search_name: "Top App Bar"
-            → severity: "info"
-
-          SKIP if:
-            - node.type is INSTANCE (already a library component) ✅
-            - node.type is TEXT (text nodes are not components)
-            - node is the top-level page/frame (e.g. "iPhone 13 & 14 - 2")
-
-          Step 7: Call create_commit with:
-            project_id: {{project_id}}
-            branch: source_branch
-            commit_message: "chore: component audit results [skip ci]"
-            actions: [{
-              action: "create",
-              file_path: "demo/component-fix-plan.json",
-              content: <JSON string>
-            }]
-
-          The JSON to commit:
-          {
-            "generated_at": "<ISO timestamp>",
-            "design_system": "<name from standards>",
-            "summary": {
-              "total_nodes_reviewed": N,
-              "already_components": N,
-              "should_be_components": N
-            },
-            "findings": [
+                "node_id":               "1:234",
+                "node_name":             "Section 4",
+                "node_type":             "FRAME",
+                "node_width":            375,
+                "node_height":           80,
+                "case":                  "B",
+                "semantic_type":         "Navigation Bar",
+                "inference_reason":      "Full-width FRAME (375×80px) with 3 children each containing icon+text. Name 'Section 4' also matches nav pattern.",
+                "source_component":      null,
+                "target_component_name": "Navigation Bar/Navigation Bar",
+                "figma_search_name":     "Navigation Bar",
+                "confidence":            "high"
+              },
               {
-                "node_id":               "123:456",
+                "node_id":               "1:100",
+                "node_name":             "Button/Filled button",
+                "node_type":             "INSTANCE",
+                "node_width":            160,
+                "node_height":           40,
+                "case":                  "A",
+                "semantic_type":         "Filled Button",
+                "inference_reason":      "mainComponentName = 'Button/Filled button' — direct instance identification.",
+                "source_component":      "Button/Filled button",
+                "target_component_name": "Button/Filled Button",
+                "figma_search_name":     "Button",
+                "confidence":            "high"
+              },
+              {
+                "node_id":               "1:50",
                 "node_name":             "Rectangle 4",
                 "node_type":             "RECTANGLE",
                 "node_width":            375,
                 "node_height":           1,
-                "inferred_component":    "Divider",
+                "case":                  "B",
+                "semantic_type":         "Divider",
+                "inference_reason":      "RECTANGLE with height=1px and width=375px. Classic thin separator pattern.",
+                "source_component":      null,
                 "target_component_name": "Divider/Divider",
                 "figma_search_name":     "Divider",
-                "severity":              "warning",
-                "reason":                "This 1px rectangle is used as a visual divider. Replace with the MD3 Divider component to inherit correct theming and spacing."
+                "confidence":            "high"
               }
             ]
           }
 
-          If no component issues are found, commit with an empty findings array.
-          Be thorough — check EVERY non-INSTANCE frame and rectangle, no matter how small.
+          Confidence levels:
+            "high"   — strong structural signal or exact instance match
+            "medium" — name keyword match with plausible structure
+            "low"    — best guess from partial signals; include but flag
+
+          Be exhaustive. Check EVERY node. Leave no untreated raw shapes.
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -412,107 +408,86 @@ definition:
       params:
         timeout: 300
 
-    - prompt_id: "review_writer_prompt"
-      name: "Review Writer Prompt"
+    # ──────────────────────────────────────────────────────────────────────────
+    # 4. MIGRATION WRITER
+    #    Reads the migration plan, generates the machine-readable fix spec for
+    #    the Figma plugin, and posts the human-readable MR summary comment.
+    # ──────────────────────────────────────────────────────────────────────────
+    - prompt_id: "migration_writer_prompt"
+      name: "Migration Writer"
       prompt_template:
         system: |
-          You are the Review Writer for the Figma Design Review pipeline.
-          You read BOTH the color audit results AND the component audit results,
-          then produce:
-          1. A unified Figma Fix Spec (machine-readable JSON for the plugin to apply ALL fixes)
-          2. A single human-readable MR comment summarising the full review
+          You are the Migration Writer for the Design System Migration pipeline.
 
-          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+          Step 1: Parse merge_request_iid from goal. Call get_merge_request. Note source_branch.
 
-          Step 2: Call get_merge_request. Note source_branch.
+          Step 2: Call get_repository_file for "demo/component-migration-plan.json".
+            Base64-decode. Read the migrations array and summary.
 
-          Step 3: Call get_repository_file for "demo/audit-results.json" (color findings).
-          Base64-decode.
-
-          Step 4: Call get_repository_file for "demo/component-fix-plan.json" (component findings).
-          Base64-decode.
-
-          Step 5: Build the unified Figma Fix Spec. It has two types of entries:
-
-          COLOR fixes (from audit-results.json findings):
-          {
-            "node_id":      "123:456",
-            "node_name":    "Primary Button",
-            "fix_type":     "color",
-            "property":     "fills",
-            "fill_index":   0,
-            "target_value": "#6750A4",
-            "token_name":   "md.sys.color.primary",
-            "severity":     "warning",
-            "reason":       "Color #65558F is detached. Closest token: md.sys.color.primary"
-          }
-
-          COMPONENT fixes (from component-fix-plan.json findings):
-          {
-            "node_id":               "123:456",
-            "node_name":             "Rectangle 4",
-            "fix_type":              "component",
-            "property":              "component",
-            "inferred_component":    "Divider",
-            "target_component_name": "Divider/Divider",
-            "figma_search_name":     "Divider",
-            "node_width":            375,
-            "node_height":           1,
-            "severity":              "warning",
-            "reason":                "This 1px rectangle is a visual divider. Replace with MD3 Divider component."
-          }
-
-          Full fix spec structure:
+          Step 3: Build the Figma Fix Spec — one entry per migration:
           {
             "generated_at": "<ISO timestamp>",
             "mr_iid": <merge_request_iid>,
             "source_branch": "<source_branch>",
-            "fixes": [ ...color fixes..., ...component fixes... ]
+            "fixes": [
+              {
+                "node_id":               "<from migration>",
+                "node_name":             "<from migration>",
+                "fix_type":              "component",
+                "property":              "component",
+                "case":                  "A" or "B",
+                "semantic_type":         "<from migration>",
+                "source_component":      "<from migration, or null>",
+                "target_component_name": "<from migration>",
+                "figma_search_name":     "<from migration>",
+                "node_width":            <number>,
+                "node_height":           <number>,
+                "confidence":            "<from migration>",
+                "reason":                "<from migration.inference_reason>"
+              }
+            ]
           }
 
-          Step 6: Call create_commit with:
-            project_id: {{project_id}}
-            branch: source_branch
+          Include ALL migrations regardless of confidence level.
+          Low-confidence entries will still appear in the plugin but be visually flagged.
+
+          Step 4: Commit the fix spec:
+            create_commit with branch=source_branch,
             commit_message: "chore: figma fix spec [skip ci]"
-            actions: [{ action: "create", file_path: "demo/figma-fix-spec.json",
-                        content: <JSON string from step 5> }]
+            actions:
+              - action: "create"
+                file_path: "demo/figma-fix-spec.json"
+                content: <JSON string from step 3>
 
-          Step 7: Call create_merge_request_note ONCE with this format:
+          Step 5: Post the MR comment using create_merge_request_note.
+            Format exactly as shown below.
 
-          ## 🎨 Design Review
+          ── MR COMMENT FORMAT ───────────────────────────────────────────────────
 
-          ### 🎨 Color Issues
-          | Element | Current | Suggested Token | Status |
-          |---------|---------|-----------------|--------|
-          | <node_name> | <current_hex> | <suggested_token> (<target_hex>) | ⚠️ |
+          ## 🧩 Design System Migration Preview
 
-          (If no color issues, write: "✅ All colors are bound to design tokens.")
+          **Target design system:** <design_system_name from migration plan>
 
-          ### 🧩 Component Issues
-          | Element | Type | Inferred As | Suggested Component | Status |
-          |---------|------|-------------|---------------------|--------|
-          | <node_name> | <node_type> | <inferred_component> | <target_component_name> | ⚠️ |
+          ### Detected Elements
 
-          (If no component issues, write: "✅ All elements use library components.")
+          | # | Element | Type | Inferred As | → DS Component | Confidence |
+          |---|---------|------|-------------|----------------|------------|
+          | 1 | `Section 4` | FRAME | Navigation Bar | `Navigation Bar/Navigation Bar` | 🟢 High |
+          | 2 | `Rectangle 4` | RECTANGLE | Divider | `Divider/Divider` | 🟢 High |
+          | 3 | `Song 1` | FRAME | List Item | `Lists/1-line item` | 🟡 Medium |
+
+          Confidence key: 🟢 High · 🟡 Medium · 🔴 Low
 
           ---
-          **Summary:** N tokens bound ✅ · N detached colors ⚠️ · N elements to componentise ⚠️
+          **Summary:** N elements scanned · N existing instances · N raw shapes inferred · **N to migrate**
 
-          **Recommendations**
-          1. <Drawn from the reason fields of color findings>
-          2. <Drawn from the reason fields of component findings>
+          > *Each migration replaces the element with the correct library component — colours, typography, and shape automatically update to match the design system.*
 
-          > Design system: <design_system field from audit-results>
-          > *Apply fixes via the Figma CI plugin → Apply Fixes tab.*
+          ---
+          🔧 **N migrations ready.** Open the Figma plugin → **Apply Fixes** tab to preview and apply.
 
-          Legend: ✅ OK · ⚠️ Needs fix
-
-          End the comment with:
-          "🔧 **X fixes ready** (Y color · Z component). Open the Figma plugin → **Apply Fixes** tab to apply."
-          (X = total fixes, Y = color fix count, Z = component fix count)
-
-          If ALL findings are empty across both audits, post:
-          "✅ **Design looks great!** All colors are token-bound and all elements use library components."
+          If there is nothing to migrate, post:
+          "✅ All elements already use the target design system's components. No migration needed."
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}

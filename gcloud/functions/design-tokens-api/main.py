@@ -85,7 +85,7 @@ def design_tokens_api(request):
 
     # ── Parse query params ──────────────────────────────────────────────────
     slug     = (request.args.get("system")   or "").strip().lower()
-    resource = (request.args.get("resource") or "tokens").strip().lower()
+    resource = (request.args.get("resource") or "components").strip().lower()
     ftype    = (request.args.get("type")     or "").strip().upper()
     query    = (request.args.get("q")        or "").strip().lower()
     group    = (request.args.get("group")    or "").strip().lower()
