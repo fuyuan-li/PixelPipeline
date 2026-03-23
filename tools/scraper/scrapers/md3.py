@@ -1,621 +1,258 @@
 """
-Scraper for Material Design 3 tokens and components.
+Scraper for Material Design 3 component specs.
 
-Token source:
-  material-foundation/material-tokens — JSON files following W3C design tokens spec.
-  Directory listing via GitHub Contents API, then individual file fetch.
+100% scraped from GitHub — zero hardcoded design values.
 
-Component source:
-  material-components/material-web — each component has its own directory;
-  variant names are derived from the TypeScript source filenames inside each dir
-  (e.g. button/filled-button.ts → variant "Filled Button").
+Source: material-components/material-web
+  tokens/versions/v30_0/sass/
 
-What is scraped vs. what is statically defined:
-  SCRAPED:
-    - Component names (from top-level component directories)
-    - Variant names (from .ts filenames inside each component directory)
-    - Component descriptions (from COMPONENT_DESCRIPTIONS table — m3.material.io)
+Resolution chain:
+  _md-ref-palette.scss     → baseline hex values  (e.g. $primary40: #6750a4)
+  _md-ref-typeface.scss    → font family strings  (e.g. $plain: Roboto)
+  _md-sys-color.scss       → color tokens         (e.g. $primary: md-ref-palette.$primary40)
+  _md-sys-typescale.scss   → typography tokens    (e.g. $label-large-size: 0.875rem)
+  _md-sys-shape.scss       → shape tokens         (e.g. $corner-full: 9999px)
+  _md-sys-elevation.scss   → elevation tokens
+  _md-sys-state.scss       → state-layer tokens
+  _md-comp-*.scss          → per-component specs  (e.g. $container-color: md-sys-color.$primary)
 
-  STATIC LOOKUP TABLES (cannot be scraped — Figma/heuristic-specific):
-    - COMPONENT_DIRS: maps repo dir names to canonical MD3 component names
-      (e.g. "iconbutton" → "Icon Button", "list" → "List Item")
-    - FIGMA_OVERRIDES: per-component Figma library data:
-        figma_search_name — keyword to find the component in the Figma library
-        variant_figma_names — mapping of scraped variant name → Figma path
-          (e.g. "Filled Button" → "Button/Filled Button")
-    - DETECTION_RULES: per-component structural inference hints used by the
-      Component Classifier agent (height, width, name keywords, etc.)
+Each component entry in the output has:
+  id      — machine id (e.g. "md.comp.button-filled")
+  name    — human name (e.g. "Button Filled")
+  tokens  — dict of resolved token values for the enabled/default state
+             color values are hex strings, sizes in rem/px, weights as numbers
 """
 
 import re
-import json
 import requests
 
-GITHUB_RAW          = "https://raw.githubusercontent.com/material-foundation/material-tokens/main"
-GITHUB_API          = "https://api.github.com/repos/material-components/material-web/contents"
-HEADERS             = {"User-Agent": "figma-ci-scraper/1.0"}
-TIMEOUT             = 15
+GITHUB_RAW = "https://raw.githubusercontent.com/material-components/material-web/main"
+GITHUB_API = "https://api.github.com/repos/material-components/material-web/contents"
+SASS_PATH  = "tokens/versions/v30_0/sass"
+HEADERS    = {"User-Agent": "figma-ci-scraper/1.0"}
+TIMEOUT    = 15
 
-# DSP tokens.json: flat list of entities with type/id/value
-DSP_TOKENS_URL = f"{GITHUB_RAW}/dsp/data/tokens.json"
+# Resolution source files, in dependency order (palette before sys-color, etc.)
+_RESOLUTION_FILES = [
+    ("md-ref-palette",   "_md-ref-palette.scss"),
+    ("md-ref-typeface",  "_md-ref-typeface.scss"),
+    ("md-sys-color",     "_md-sys-color.scss"),
+    ("md-sys-typescale", "_md-sys-typescale.scss"),
+    ("md-sys-shape",     "_md-sys-shape.scss"),
+    ("md-sys-elevation", "_md-sys-elevation.scss"),
+    ("md-sys-state",     "_md-sys-state.scss"),
+]
 
-# ── Component scraping config ──────────────────────────────────────────────────
-
-# Top-level dirs in material-components/material-web that are NOT components.
-# Everything else is treated as a component directory.
-_SKIP_DIRS = {
-    "catalog", "color", "docs", "elevation", "field", "focus", "icon",
-    "internal", "labs", "migrations", "ripple", "sass", "scripts",
-    "testing", "tokens", "typography",
-}
-
-# Per-component files whose names should NOT be treated as variant names.
-# Key: component dir name. Value: set of filenames to skip.
-_SKIP_FILES = {
-    "chips":     {"chip-set.ts"},
-    "list":      {"list.ts"},       # container, not the item component
-    "tabs":      {"tabs.ts"},       # container
-    "progress":  {"progress-indicator.ts"},
-}
-
-# dir_name → canonical MD3 component name.
-# Only entries where auto-conversion (hyphen-split + title-case) would be wrong.
-COMPONENT_DIRS = {
-    "button":      "Button",
-    "checkbox":    "Checkbox",
-    "chips":       "Chip",
-    "dialog":      "Dialog",
-    "divider":     "Divider",
-    "fab":         "FAB",
-    "iconbutton":  "Icon Button",
-    "list":        "List Item",
-    "menu":        "Menu",
-    "progress":    "Progress Indicator",
-    "radio":       "Radio Button",
-    "select":      "Select",
-    "slider":      "Slider",
-    "switch":      "Switch",
-    "tabs":        "Tabs",
-    "textfield":   "Text Field",
-    "tooltip":     "Tooltip",
-}
-
-# ── Figma-specific overrides ───────────────────────────────────────────────────
-# These cannot be scraped — they are specific to how the MD3 Figma community kit
-# names its components and how the Component Classifier recognises raw shapes.
-#
-# figma_search_name   — substring to search for in Figma instance mainComponentName
-# variant_figma_names — maps a scraped variant name to the exact Figma path
-#                       (leave out variants that follow the default pattern)
-# detection           — structural inference rules used by the classifier agent
-
-FIGMA_OVERRIDES = {
-    "Button": {
-        "figma_search_name": "Button",
-        "variant_figma_names": {
-            "Elevated Button":     "Button/Elevated Button",
-            "Filled Button":       "Button/Filled Button",
-            "Filled Tonal Button": "Button/Filled Tonal Button",
-            "Outlined Button":     "Button/Outlined Button",
-            "Text Button":         "Button/Text Button",
-        },
-        "detection": {
-            "name_keywords":       ["button", "btn", "cta", "action", "submit", "confirm"],
-            "node_types":          ["FRAME", "RECTANGLE"],
-            "height_range":        [32, 56],
-            "max_width":           240,
-            "requires_text_child": True,
-            "notes": "Frame 32–56px tall, ≤240px wide, with a TEXT child.",
-        },
-    },
-    "Chip": {
-        "figma_search_name": "Chip",
-        "variant_figma_names": {
-            "Assist Chip":     "Chips/Assist chip",
-            "Filter Chip":     "Chips/Filter chip",
-            "Input Chip":      "Chips/Input chip",
-            "Suggestion Chip": "Chips/Suggestion chip",
-        },
-        "detection": {
-            "name_keywords": ["chip", "tag", "badge", "filter", "pill"],
-            "node_types":    ["FRAME"],
-            "height_range":  [28, 40],
-            "max_width":     160,
-            "notes": "Small rounded frame (28–40px tall), label + optional icon.",
-        },
-    },
-    "Dialog": {
-        "figma_search_name": "Dialog",
-        "variant_figma_names": {},
-        "detection": {
-            "name_keywords": ["dialog", "modal", "alert", "popup"],
-            "node_types":    ["FRAME"],
-            "height_range":  [120, 560],
-            "notes": "Floating frame centred on screen, contains title + actions.",
-        },
-    },
-    "Divider": {
-        "figma_search_name": "Divider",
-        "variant_figma_names": {
-            "Divider":        "Divider/Divider",
-            "Inset Divider":  "Divider/Inset divider",
-        },
-        "detection": {
-            "name_keywords": ["rectangle", "divider", "separator", "line", "hr"],
-            "node_types":    ["RECTANGLE", "FRAME", "LINE"],
-            "max_height":    4,
-            "min_width":     100,
-            "notes": "Thin element (height ≤ 4px, width > 100px). Raw RECTANGLE used as separator.",
-        },
-    },
-    "FAB": {
-        "figma_search_name": "FAB",
-        "variant_figma_names": {
-            "Fab":         "FAB/FAB",
-            "Branded Fab": "FAB/Branded FAB",
-        },
-        "detection": {
-            "name_keywords": ["fab", "floating action", "primary action"],
-            "node_types":    ["FRAME"],
-            "height_range":  [40, 96],
-            "max_width":     200,
-            "notes": "Square/rounded frame (cornerRadius ≥ 12), contains an icon child.",
-        },
-    },
-    "Icon Button": {
-        "figma_search_name": "Icon Button",
-        "variant_figma_names": {},
-        "detection": {
-            "name_keywords": ["icon button", "icon-btn", "icon btn"],
-            "node_types":    ["FRAME"],
-            "height_range":  [40, 48],
-            "max_width":     48,
-            "notes": "Square frame (40–48px), contains a single VECTOR/icon child.",
-        },
-    },
-    "List Item": {
-        "figma_search_name": "List Item",
-        "variant_figma_names": {
-            "List Item": "Lists/1-line item",
-        },
-        "detection": {
-            "name_keywords":       ["song", "track", "item", "row", "list", "entry", "music"],
-            "node_types":          ["FRAME"],
-            "height_range":        [48, 88],
-            "min_width":           200,
-            "requires_text_child": True,
-            "notes": "Full-width frame (≥200px), 48–88px tall, repeating as siblings.",
-        },
-    },
-    "Menu": {
-        "figma_search_name": "Menu",
-        "variant_figma_names": {},
-        "detection": {
-            "name_keywords": ["menu", "dropdown", "context menu"],
-            "node_types":    ["FRAME"],
-            "height_range":  [48, 400],
-            "notes": "Floating list of options, typically with shadow/elevation.",
-        },
-    },
-    "Navigation Bar": {
-        # Note: material-web does not have a "navigationbar" dir; the component
-        # is assembled from Tabs. The Figma community kit has it as Navigation Bar.
-        "figma_search_name": "Navigation Bar",
-        "variant_figma_names": {
-            "Navigation Bar": "Navigation Bar/Navigation Bar",
-        },
-        "detection": {
-            "name_keywords": ["nav bar", "navigation", "tab bar", "bottom nav",
-                              "section 4", "navbar"],
-            "node_types":    ["FRAME"],
-            "height_range":  [56, 96],
-            "min_width":     300,
-            "notes": "Full-width frame (≥300px), 56–96px tall. 3–5 icon+label destinations.",
-        },
-    },
-    "Progress Indicator": {
-        "figma_search_name": "Progress Indicator",
-        "variant_figma_names": {
-            "Linear Progress Indicator":  "Progress indicators/Linear",
-            "Circular Progress Indicator": "Progress indicators/Circular",
-        },
-        "detection": {
-            "name_keywords": ["progress", "loading", "spinner"],
-            "node_types":    ["FRAME"],
-            "notes": "Thin horizontal bar or circular indicator.",
-        },
-    },
-    "Radio Button": {
-        "figma_search_name": "Radio Button",
-        "variant_figma_names": {},
-        "detection": {
-            "name_keywords": ["radio", "radio button"],
-            "node_types":    ["FRAME"],
-            "height_range":  [40, 48],
-            "max_width":     48,
-            "notes": "Small circular selection control.",
-        },
-    },
-    "Select": {
-        "figma_search_name": "Select",
-        "variant_figma_names": {
-            "Filled Select":   "Select/Filled",
-            "Outlined Select": "Select/Outlined",
-        },
-        "detection": {
-            "name_keywords": ["select", "dropdown select", "picker"],
-            "node_types":    ["FRAME"],
-            "height_range":  [48, 64],
-            "notes": "Form field with a trailing dropdown arrow.",
-        },
-    },
-    "Slider": {
-        "figma_search_name": "Slider",
-        "variant_figma_names": {},
-        "detection": {
-            "name_keywords": ["slider", "range", "scrubber"],
-            "node_types":    ["FRAME"],
-            "height_range":  [40, 48],
-            "notes": "Horizontal track with a draggable thumb.",
-        },
-    },
-    "Switch": {
-        "figma_search_name": "Switch",
-        "variant_figma_names": {},
-        "detection": {
-            "name_keywords": ["switch", "toggle"],
-            "node_types":    ["FRAME"],
-            "height_range":  [28, 36],
-            "max_width":     60,
-            "notes": "Toggle control, wider than tall.",
-        },
-    },
-    "Tabs": {
-        "figma_search_name": "Tabs",
-        "variant_figma_names": {
-            "Primary Tab":   "Tabs/Primary tabs",
-            "Secondary Tab": "Tabs/Secondary tabs",
-        },
-        "detection": {
-            "name_keywords": ["tabs", "tab bar", "tab panel"],
-            "node_types":    ["FRAME"],
-            "height_range":  [48, 56],
-            "min_width":     200,
-            "notes": "Full-width horizontal tab strip.",
-        },
-    },
-    "Text Field": {
-        "figma_search_name": "Text Field",
-        "variant_figma_names": {
-            "Filled Text Field":   "Text fields/Filled",
-            "Outlined Text Field": "Text fields/Outlined",
-        },
-        "detection": {
-            "name_keywords": ["text field", "input", "textfield", "text input", "form field"],
-            "node_types":    ["FRAME"],
-            "height_range":  [48, 64],
-            "notes": "Input field with label, typically has a stroke or filled background.",
-        },
-    },
-    "Tooltip": {
-        "figma_search_name": "Tooltip",
-        "variant_figma_names": {},
-        "detection": {
-            "name_keywords": ["tooltip", "hint", "popover"],
-            "node_types":    ["FRAME"],
-            "height_range":  [24, 48],
-            "max_width":     200,
-            "notes": "Small floating label, appears on hover.",
-        },
-    },
-    "Card": {
-        # Not in material-web as a standalone component dir, but present in Figma kit.
-        "figma_search_name": "Card",
-        "variant_figma_names": {
-            "Filled Card":   "Cards/Filled card",
-            "Outlined Card": "Cards/Outlined card",
-            "Elevated Card": "Cards/Elevated card",
-        },
-        "detection": {
-            "name_keywords":     ["card", "tile", "panel"],
-            "node_types":        ["FRAME"],
-            "min_corner_radius": 8,
-            "notes": "Frame with cornerRadius ≥ 8, containing headline text.",
-        },
-    },
-    "Top App Bar": {
-        # Not a standalone dir in material-web; present in Figma kit.
-        "figma_search_name": "Top App Bar",
-        "variant_figma_names": {
-            "Center-aligned Top App Bar": "Top app bar/Center-aligned",
-            "Small Top App Bar":          "Top app bar/Small",
-            "Medium Top App Bar":         "Top app bar/Medium",
-            "Large Top App Bar":          "Top app bar/Large",
-        },
-        "detection": {
-            "name_keywords": ["top bar", "app bar", "header", "toolbar",
-                              "section 1", "section 2", "section 3"],
-            "node_types":    ["FRAME"],
-            "height_range":  [56, 152],
-            "min_width":     300,
-            "notes": "Full-width frame at top of screen, 56–152px tall.",
-        },
-    },
-}
-
-# Components present in the Figma community kit but NOT as a dedicated dir in
-# material-components/material-web (so they won't appear in the scraped list).
-# Merged in after scraping.
-_FIGMA_ONLY_COMPONENTS = ["Card", "Top App Bar", "Navigation Bar"]
-
-# Descriptions sourced from m3.material.io/components (stable copy — changes rarely).
-COMPONENT_DESCRIPTIONS = {
-    "Button":             "Buttons help people initiate actions, from sending an email to deleting a document.",
-    "Checkbox":           "Checkboxes let users select one or more items from a list.",
-    "Chip":               "Chips help people enter information, make selections, filter content, or trigger actions.",
-    "Dialog":             "Dialogs provide important prompts in a user flow.",
-    "Divider":            "Dividers are thin lines that group content in lists and layouts.",
-    "FAB":                "The FAB represents the most important action on a screen.",
-    "Icon Button":        "Icon buttons help people take supplementary actions with a single tap.",
-    "List Item":          "Lists are continuous, vertical indexes of text or images.",
-    "Menu":               "Menus display a list of choices on a temporary surface.",
-    "Navigation Bar":     "Navigation bars offer a persistent and convenient way to switch between primary destinations.",
-    "Progress Indicator": "Progress indicators show the status of a process in real time.",
-    "Radio Button":       "Radio buttons let people select one option from a set.",
-    "Select":             "Select menus display a list of choices on a temporary surface and display the currently selected menu item above the list.",
-    "Slider":             "Sliders allow users to make selections from a range of values.",
-    "Switch":             "Switches toggle the state of a single item on or off.",
-    "Tabs":               "Tabs organize content across different screens, data sets, and other interactions.",
-    "Text Field":         "Text fields let users enter text into a UI.",
-    "Tooltip":            "Tooltips display brief labels or messages.",
-    "Card":               "Cards contain content and actions about a single subject.",
-    "Top App Bar":        "Top app bars display navigation and actions relating to the current screen.",
-    "Checkbox":           "Checkboxes let users select one or more items from a list.",
-}
-
-# ── Fallback: M3 Baseline Light Scheme ────────────────────────────────────────
-# Source: https://m3.material.io/styles/color/static-color-schemes
-FALLBACK_COLORS = {
-    # Primary
-    "md.sys.color.primary":              "#6750A4",
-    "md.sys.color.on-primary":           "#FFFFFF",
-    "md.sys.color.primary-container":    "#EADDFF",
-    "md.sys.color.on-primary-container": "#21005D",
-    # Secondary
-    "md.sys.color.secondary":              "#625B71",
-    "md.sys.color.on-secondary":           "#FFFFFF",
-    "md.sys.color.secondary-container":    "#E8DEF8",
-    "md.sys.color.on-secondary-container": "#1D192B",
-    # Tertiary
-    "md.sys.color.tertiary":              "#7D5260",
-    "md.sys.color.on-tertiary":           "#FFFFFF",
-    "md.sys.color.tertiary-container":    "#FFD8E4",
-    "md.sys.color.on-tertiary-container": "#31111D",
-    # Error
-    "md.sys.color.error":              "#B3261E",
-    "md.sys.color.on-error":           "#FFFFFF",
-    "md.sys.color.error-container":    "#F9DEDC",
-    "md.sys.color.on-error-container": "#410E0B",
-    # Surface / Background
-    "md.sys.color.background":          "#FFFBFE",
-    "md.sys.color.on-background":       "#1C1B1F",
-    "md.sys.color.surface":             "#FFFBFE",
-    "md.sys.color.on-surface":          "#1C1B1F",
-    "md.sys.color.surface-variant":     "#E7E0EC",
-    "md.sys.color.on-surface-variant":  "#49454F",
-    "md.sys.color.surface-container-lowest":  "#FFFFFF",
-    "md.sys.color.surface-container-low":     "#F7F2FA",
-    "md.sys.color.surface-container":         "#F3EDF7",
-    "md.sys.color.surface-container-high":    "#ECE6F0",
-    "md.sys.color.surface-container-highest": "#E6E0E9",
-    # Outline
-    "md.sys.color.outline":         "#79747E",
-    "md.sys.color.outline-variant": "#CAC4D0",
-    # Misc
-    "md.sys.color.shadow":           "#000000",
-    "md.sys.color.scrim":            "#000000",
-    "md.sys.color.inverse-surface":   "#313033",
-    "md.sys.color.inverse-on-surface":"#F4EFF4",
-    "md.sys.color.inverse-primary":   "#D0BCFF",
-}
-
-# ── Typography tokens (stable spec values) ────────────────────────────────────
-FALLBACK_TYPOGRAPHY = {
-    "md.sys.typescale.display-large.size":   "57",
-    "md.sys.typescale.display-medium.size":  "45",
-    "md.sys.typescale.display-small.size":   "36",
-    "md.sys.typescale.headline-large.size":  "32",
-    "md.sys.typescale.headline-medium.size": "28",
-    "md.sys.typescale.headline-small.size":  "24",
-    "md.sys.typescale.title-large.size":     "22",
-    "md.sys.typescale.title-medium.size":    "16",
-    "md.sys.typescale.title-small.size":     "14",
-    "md.sys.typescale.label-large.size":     "14",
-    "md.sys.typescale.label-medium.size":    "12",
-    "md.sys.typescale.label-small.size":     "11",
-    "md.sys.typescale.body-large.size":      "16",
-    "md.sys.typescale.body-medium.size":     "14",
-    "md.sys.typescale.body-small.size":      "12",
-}
+# Interaction / non-default state prefixes to exclude from component specs.
+# We only want the default (enabled) state values.
+_STATE_PREFIXES = (
+    "hover-", "focus-", "pressed-", "dragged-",
+    "disabled-", "error-", "selected-",
+    # logical shape sub-tokens (we keep the main container-shape)
+    "container-shape-start-", "container-shape-end-",
+)
 
 
-def _hex8_to_hex6(value: str) -> str:
-    """Convert #rrggbbaa → #rrggbb (strip alpha)."""
-    v = value.strip()
-    if v.startswith("#") and len(v) == 9:
-        return v[:7]
-    return v
+# ── Fetch helpers ──────────────────────────────────────────────────────────────
 
-
-def _try_github_fetch():
-    """Fetch tokens from material-foundation/material-tokens DSP format."""
-    tokens = []
+def _fetch(path: str) -> str:
     try:
-        resp = requests.get(DSP_TOKENS_URL, headers=HEADERS, timeout=TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        entities = data.get("entities", [])
-        for e in entities:
-            if not isinstance(e, dict) or e.get("class") != "token":
-                continue
-            tok_type = e.get("type", "").lower()
-            name     = e.get("id") or e.get("name", "")
-            value    = str(e.get("value", "")).strip()
-            if not name or not value:
-                continue
-            if tok_type == "color":
-                tokens.append({
-                    "name":  name,
-                    "value": _hex8_to_hex6(value),
-                    "type":  "COLOR",
-                    "group": name.split(".")[2] if name.count(".") >= 2 else "color",
-                })
-            elif tok_type in ("number", "float", "dimension"):
-                tokens.append({
-                    "name":  name,
-                    "value": value,
-                    "type":  "FLOAT",
-                    "group": name.split(".")[2] if name.count(".") >= 2 else "misc",
-                })
-    except Exception:
-        pass
+        r = requests.get(f"{GITHUB_RAW}/{path}", headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        return r.text
+    except Exception as e:
+        print(f"    ⚠ fetch failed {path}: {e}")
+        return ""
+
+
+def _list_sass_files() -> list[str]:
+    try:
+        r = requests.get(f"{GITHUB_API}/{SASS_PATH}", headers=HEADERS, timeout=TIMEOUT)
+        r.raise_for_status()
+        return [item["name"] for item in r.json() if item["type"] == "file"]
+    except Exception as e:
+        print(f"    ⚠ could not list sass dir: {e}")
+        return []
+
+
+# ── SCSS parsing ───────────────────────────────────────────────────────────────
+
+def _parse_vars(content: str) -> dict[str, str]:
+    """
+    Extract all top-level SCSS variable assignments from file content.
+    Returns {var_name: raw_value_string}.
+
+    Handles:
+      $primary40: #6750a4;
+      $primary: md-ref-palette.$primary40;
+      $label-large-size: 0.875rem;
+      $corner-full: 9999px;
+    """
+    result = {}
+    for line in content.splitlines():
+        line = line.strip()
+        if not line.startswith("$"):
+            continue
+        # Strip inline comments
+        line = re.sub(r"\s*//.*$", "", line).strip()
+        line = line.rstrip(";").strip()
+        if ":" not in line:
+            continue
+        name, _, value = line.partition(":")
+        name  = name.strip().lstrip("$")
+        value = value.strip()
+        # Skip empty, null, or complex SCSS expressions (function calls, maps, etc.)
+        if not name or not value or value == "null":
+            continue
+        if "(" in value or "{" in value:
+            continue
+        result[name] = value
+    return result
+
+
+def _resolve(raw: str, maps: dict[str, dict]) -> str | None:
+    """
+    Resolve a SCSS value to its final string.
+
+    'md-sys-color.$primary'     → looks up maps['md-sys-color']['primary']
+    'md-ref-palette.$primary40' → looks up maps['md-ref-palette']['primary40']
+    '#6750a4'                   → returned as-is
+    '40px', '0.875rem', '500'   → returned as-is
+    'Roboto'                    → returned as-is
+    """
+    if not raw:
+        return None
+    # Pattern: module.$varname
+    m = re.fullmatch(r"([\w-]+)\.\$([\w-]+)", raw)
+    if m:
+        module, var = m.group(1), m.group(2)
+        if module in maps and var in maps[module]:
+            return maps[module][var]
+        return None   # unresolvable reference — omit
+    return raw
+
+
+# ── Resolution map builder ─────────────────────────────────────────────────────
+
+def _build_resolution_maps(available_files: set[str]) -> dict[str, dict]:
+    """
+    Fetch and parse all sys/ref token files.
+    Returns {module_name: {var_name: resolved_value}}.
+    Each module is fully resolved before the next one is parsed,
+    so cross-module references work (e.g. sys-color → ref-palette).
+    """
+    maps: dict[str, dict] = {}
+
+    for module_name, filename in _RESOLUTION_FILES:
+        if filename not in available_files:
+            print(f"    ⚠ {filename} not found — skipping")
+            continue
+
+        print(f"    Loading {filename}…")
+        raw_vars = _parse_vars(_fetch(f"{SASS_PATH}/{filename}"))
+        resolved: dict[str, str] = {}
+        for var, raw in raw_vars.items():
+            val = _resolve(raw, maps)
+            if val is not None:
+                resolved[var] = val
+        maps[module_name] = resolved
+        print(f"      → {len(resolved)} vars resolved")
+
+    return maps
+
+
+# ── Component file parser ──────────────────────────────────────────────────────
+
+def _parse_component(content: str, maps: dict[str, dict]) -> dict[str, str]:
+    """
+    Parse a _md-comp-*.scss file and return a dict of resolved token values
+    for the default (enabled) state only.
+    """
+    raw_vars = _parse_vars(content)
+    tokens: dict[str, str] = {}
+    for name, raw in raw_vars.items():
+        # Skip interaction / non-default states
+        if any(name.startswith(p) for p in _STATE_PREFIXES):
+            continue
+        val = _resolve(raw, maps)
+        if val is not None:
+            tokens[name] = val
     return tokens
 
 
-def _scrape_component_dirs():
+def _filename_to_id_and_name(filename: str) -> tuple[str, str]:
     """
-    List all component directories from material-components/material-web.
-    Returns a dict of {dir_name: [variant_ts_filenames]} for known component dirs.
-    Falls back to an empty dict if GitHub is unreachable.
+    '_md-comp-button-filled.scss' → ('md.comp.button-filled', 'Button Filled')
     """
-    try:
-        resp = requests.get(GITHUB_API, headers=HEADERS, timeout=TIMEOUT)
-        resp.raise_for_status()
-        top_level = {item["name"] for item in resp.json() if item["type"] == "dir"}
-    except Exception:
-        return {}
-
-    component_dirs = {}
-    for dir_name in sorted(top_level - _SKIP_DIRS):
-        if dir_name not in COMPONENT_DIRS:
-            continue  # only include dirs we have a name mapping for
-        try:
-            resp = requests.get(f"{GITHUB_API}/{dir_name}", headers=HEADERS, timeout=TIMEOUT)
-            resp.raise_for_status()
-            skip = _SKIP_FILES.get(dir_name, set())
-            ts_files = [
-                item["name"]
-                for item in resp.json()
-                if item["type"] == "file"
-                and item["name"].endswith(".ts")
-                and not item["name"].endswith("_test.ts")
-                and item["name"] not in skip
-                and item["name"] not in {"harness.ts", "index.ts"}
-                and "internal" not in item.get("path", "")
-            ]
-            component_dirs[dir_name] = ts_files
-        except Exception:
-            component_dirs[dir_name] = []
-
-    return component_dirs
+    stem = filename.removeprefix("_md-comp-").removesuffix(".scss")
+    name = " ".join(w.capitalize() for w in stem.split("-"))
+    return f"md.comp.{stem}", name
 
 
-def _ts_filename_to_variant_name(filename: str) -> str:
-    """Convert a TypeScript filename to a human-readable variant name.
-    e.g. 'filled-button.ts' → 'Filled Button'
-         'branded-fab.ts'   → 'Branded Fab'
+# ── Public entry point ─────────────────────────────────────────────────────────
+
+def scrape() -> dict:
     """
-    stem = filename.replace(".ts", "")
-    return " ".join(word.capitalize() for word in stem.split("-"))
+    Scrape the complete MD3 component catalog from material-components/material-web.
 
+    Returns:
+      {
+        "system": "Material Design 3",
+        "slug": "md3",
+        "version": "30.0",
+        "source": "<GitHub path>",
+        "components": [
+          {
+            "id":     "md.comp.button-filled",
+            "name":   "Button Filled",
+            "tokens": {
+              "container-color":    "#6750a4",
+              "container-height":   "40px",
+              "container-shape":    "9999px",
+              "label-text-size":    "0.875rem",
+              "label-text-weight":  "500",
+              "leading-space":      "24px",
+              ...
+            }
+          },
+          ...
+        ]
+      }
+    """
+    print("  Listing sass directory…")
+    all_files = _list_sass_files()
+    if not all_files:
+        return {"error": "Could not list sass directory from GitHub"}
 
-def _build_component_catalog(scraped_dirs: dict) -> list:
-    """
-    Build the component catalog by merging scraped GitHub data with the
-    FIGMA_OVERRIDES and COMPONENT_DESCRIPTIONS lookup tables.
-    """
+    available = set(all_files)
+    print(f"  Found {len(all_files)} files total.\n  Building token resolution maps…")
+    maps = _build_resolution_maps(available)
+
+    comp_files = sorted(f for f in all_files
+                        if f.startswith("_md-comp-") and f.endswith(".scss"))
+    print(f"\n  Scraping {len(comp_files)} component files…")
+
     components = []
-    seen = set()
-
-    # ── Components discovered by scraping ────────────────────────────────────
-    for dir_name, ts_files in scraped_dirs.items():
-        comp_name = COMPONENT_DIRS[dir_name]
-        if comp_name in seen:
+    for filename in comp_files:
+        comp_id, comp_name = _filename_to_id_and_name(filename)
+        content = _fetch(f"{SASS_PATH}/{filename}")
+        if not content:
             continue
-        seen.add(comp_name)
-
-        overrides = FIGMA_OVERRIDES.get(comp_name, {})
-        variant_figma = overrides.get("variant_figma_names", {})
-
-        # Derive variant list from scraped .ts filenames
-        variants = []
-        for fname in sorted(ts_files):
-            vname = _ts_filename_to_variant_name(fname)
-            variants.append({
-                "name":       vname,
-                "figma_name": variant_figma.get(vname, f"{comp_name}/{vname}"),
-            })
-
-        # If no variants found, fall back to a single entry = the component itself
-        if not variants:
-            default_figma = variant_figma.get(comp_name, comp_name)
-            variants = [{"name": comp_name, "figma_name": default_figma}]
-
-        components.append({
-            "name":             comp_name,
-            "description":      COMPONENT_DESCRIPTIONS.get(comp_name, ""),
-            "figma_search_name": overrides.get("figma_search_name", comp_name),
-            "variants":         variants,
-            "detection":        overrides.get("detection", {}),
-        })
-
-    # ── Figma-only components (not in material-web repo) ─────────────────────
-    for comp_name in _FIGMA_ONLY_COMPONENTS:
-        if comp_name in seen:
+        tokens = _parse_component(content, maps)
+        if not tokens:
             continue
-        seen.add(comp_name)
-        overrides = FIGMA_OVERRIDES.get(comp_name, {})
-        variant_figma = overrides.get("variant_figma_names", {})
-        variants = [
-            {"name": vname, "figma_name": fname}
-            for vname, fname in variant_figma.items()
-        ] or [{"name": comp_name, "figma_name": comp_name}]
         components.append({
-            "name":             comp_name,
-            "description":      COMPONENT_DESCRIPTIONS.get(comp_name, ""),
-            "figma_search_name": overrides.get("figma_search_name", comp_name),
-            "variants":         variants,
-            "detection":        overrides.get("detection", {}),
+            "id":     comp_id,
+            "name":   comp_name,
+            "tokens": tokens,
         })
+        print(f"    ✓ {comp_name:45s} {len(tokens):3d} tokens")
 
-    return sorted(components, key=lambda c: c["name"])
-
-
-def scrape():
-    """Return normalised M3 data: component catalog (primary) + tokens (supplementary)."""
-
-    # ── Components ────────────────────────────────────────────────────────────
-    scraped_dirs = _scrape_component_dirs()
-    components   = _build_component_catalog(scraped_dirs)
-    comp_source  = "material-components/material-web (GitHub)" if scraped_dirs else "FIGMA_OVERRIDES fallback only"
-
-    # ── Tokens ────────────────────────────────────────────────────────────────
-    tokens = _try_github_fetch()
-    token_source = "material-foundation/material-tokens (GitHub)"
-    if not tokens:
-        token_source = "curated fallback (GitHub unavailable)"
-        for name, value in FALLBACK_COLORS.items():
-            group = name.split(".")[2] if name.count(".") >= 2 else "color"
-            tokens.append({"name": name, "value": value, "type": "COLOR", "group": group})
-        for name, value in FALLBACK_TYPOGRAPHY.items():
-            tokens.append({"name": name, "value": value, "type": "FLOAT", "group": "typography"})
-
+    print(f"\n  Done — {len(components)} components scraped.")
     return {
-        "system":         "Material Design 3",
-        "slug":           "md3",
-        "version":        "baseline-light",
-        "component_source": comp_source,
-        "token_source":   token_source,
-        "components":     components,
-        "tokens":         tokens,
+        "system":     "Material Design 3",
+        "slug":       "md3",
+        "version":    "30.0",
+        "source":     f"{GITHUB_RAW}/{SASS_PATH}",
+        "components": components,
     }
