@@ -257,11 +257,35 @@ definition:
             Use the inference rules below to determine semantic type.
             Then map to the best matching component in the target DS.
 
+          ── PRE-PASS: SIBLING TEXT ASSOCIATION ──────────────────────────────────
+
+          Before classifying, resolve logical text labels for flat/sketch designs
+          where TEXT nodes are siblings of RECTANGLE/FRAME rather than children.
+
+          For every RECTANGLE or FRAME node at any level:
+            Collect all sibling TEXT nodes (same parent, not children) whose
+            (x, y) origin falls within this node's bounding box:
+              sibling.x >= node.x  AND  sibling.x <= node.x + node.width
+              sibling.y >= node.y  AND  sibling.y <= node.y + node.height
+            Treat those TEXT nodes as the logical label(s) of this node —
+            the same way you would treat a has_text_child = true case.
+            Do NOT classify those TEXT nodes separately; they belong to the node.
+
+          ── PRE-PASS: REACTIONS (highest-confidence signal) ─────────────────────
+
+          If a node has a non-empty `reactions` array:
+            - trigger = "ON_CLICK" AND action = "NAVIGATE" → interactive element.
+              Combined with resolved text label → Button (high confidence).
+              No text label, but has icon child → Icon Button.
+              Full-width, multiple siblings with same pattern → Tab / Nav item.
+            - These nodes should always be classified, never skipped.
+
           ── INFERENCE RULES FOR RAW SHAPES ─────────────────────────────────────
 
           Look at each node's: type, name, width, height, cornerRadius,
           structural_summary (child_count, child_types, has_text_child,
-          has_icon_child, text_content), and position in the tree.
+          has_icon_child, text_content), resolved sibling text labels (from
+          pre-pass above), reactions, and position in the tree.
 
           RULE: Divider
             Trigger: (height ≤ 4 AND width > 60)

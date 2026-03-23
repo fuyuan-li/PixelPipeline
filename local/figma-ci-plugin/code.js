@@ -472,6 +472,18 @@ function serializeNode(node) {
     out.mainComponentKey  = node.mainComponent.key || null;
   }
 
+  // Capture prototype interactions (reactions).
+  // A node with an ON_CLICK → NAVIGATE reaction is almost certainly
+  // an interactive element (button, tab, link), regardless of its visual shape.
+  if ('reactions' in node && Array.isArray(node.reactions) && node.reactions.length > 0) {
+    out.reactions = node.reactions.map(function(r) {
+      return {
+        trigger: r.trigger ? r.trigger.type : null,
+        action:  r.action  ? r.action.type  : null,
+      };
+    });
+  }
+
   // ── Structural summary for component inference ──────────────────────────
   // Give the agent a quick structural fingerprint without requiring full
   // recursive traversal. These hints help the component_auditor apply its
