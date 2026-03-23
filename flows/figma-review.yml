@@ -156,7 +156,9 @@ definition:
           Read "designSystemUrl" from the JSON root.
 
           Step 5: Call run_command with:
-            curl -s "<designSystemUrl>"
+            curl -s -L -m 30 "<designSystemUrl>" 2>&1 | head -c 50000
+          This follows redirects (-L), sets a 30s timeout (-m 30), captures errors (2>&1),
+          and limits output to 50KB to avoid hangs.
           From the fetched content, extract the complete list of standard definitions
           for ALL of the following categories.
           Do NOT use any hardcoded values — all token names and values must come
@@ -207,12 +209,12 @@ definition:
             ]
           }
 
-          If run_command fails or returns no useful data, still commit the file with
-          empty arrays and an "error" field describing what happened, so downstream
-          agents know to skip token validation:
+          If run_command fails (any exit code) or returns no useful token data,
+          log the exact error message and still commit the file so downstream
+          agents can skip validation gracefully:
           {
             "design_system_url": "<designSystemUrl>",
-            "error": "<description of failure>",
+            "error": "Network request failed: curl exit code 56 (receive error)",
             "color_tokens": [],
             "typography_tokens": [],
             "shape_tokens": [],
