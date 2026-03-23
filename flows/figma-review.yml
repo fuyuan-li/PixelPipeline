@@ -93,7 +93,6 @@ definition:
     entry_point: "intake"
 
   prompts:
-
     # ──────────────────────────────────────────────────────────────────────────
     # 1. INTAKE
     # ──────────────────────────────────────────────────────────────────────────
@@ -140,9 +139,7 @@ definition:
           Endpoint: GET <BASE_URL>?system=<slug>&resource=components
 
           Slug mapping:
-            "Material Design 3" / "MD3" / anything containing "Material"  → md3
-            "Ant Design" / "Ant"                                           → antd
-            "Carbon Design System" / "IBM" / "Carbon"                     → carbon
+            use slug = md3 for now.
 
           Each component in the response has:
             name              — human-readable name (e.g. "Button")
