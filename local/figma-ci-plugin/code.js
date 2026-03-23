@@ -205,7 +205,7 @@ figma.ui.onmessage = async (msg) => {
         // slug comes pre-resolved from ui.html's DESIGN_SYSTEM_SLUG_MAP.
         // Pass it through so the Flow can call the design-tokens API directly
         // without guessing, while still having the human-readable name for review text.
-        const slug = lib.slug ?? null;
+        const slug = lib.slug !== undefined && lib.slug !== null ? lib.slug : null;
         if (lib.key) {
           // Variable collection — we can fetch token names.
           try {
