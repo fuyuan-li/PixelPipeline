@@ -304,6 +304,14 @@
     custom.style.display = sel.value === '__custom__' ? 'block' : 'none';
   }
 
+  // 1:1 mapping from dropdown display name → API slug.
+  // Keep in sync with: gcloud/functions/design-tokens-api/main.py VALID_SLUGS
+  const DESIGN_SYSTEM_SLUG_MAP = {
+    'Material Design 3':    'md3',
+    'Ant Design':           'antd',
+    'Carbon Design System': 'carbon',
+  };
+
   // Returns the canonical design-system name to send to the agent.
   function getSelectedLibraryName() {
     const sel = document.getElementById('librarySelect');
@@ -316,7 +324,8 @@
   function getSelectedLibrary() {
     const name = getSelectedLibraryName();
     if (!name) return null;
-    return { key: null, name: name, libraryName: name, type: 'named' };
+    const slug = DESIGN_SYSTEM_SLUG_MAP[name] ?? null;
+    return { key: null, name: name, libraryName: name, slug: slug, type: 'named' };
   }
 
   function getSubmitValues() {

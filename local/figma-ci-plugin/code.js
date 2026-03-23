@@ -202,12 +202,17 @@ figma.ui.onmessage = async (msg) => {
       let designSystem = null;
       if (msg.selectedLibrary) {
         const lib = msg.selectedLibrary;
+        // slug comes pre-resolved from ui.html's DESIGN_SYSTEM_SLUG_MAP.
+        // Pass it through so the Flow can call the design-tokens API directly
+        // without guessing, while still having the human-readable name for review text.
+        const slug = lib.slug ?? null;
         if (lib.key) {
           // Variable collection — we can fetch token names.
           try {
             const libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(lib.key);
             designSystem = {
               name:           lib.libraryName,
+              slug:           slug,
               collectionName: lib.name,
               type:           'variables',
               variables: libVars.map(v => ({
@@ -219,6 +224,7 @@ figma.ui.onmessage = async (msg) => {
           } catch (libErr) {
             designSystem = {
               name:      lib.libraryName,
+              slug:      slug,
               type:      'variables',
               error:     libErr.message,
               variables: [],
@@ -230,6 +236,7 @@ figma.ui.onmessage = async (msg) => {
           // and mainComponentName instead.
           designSystem = {
             name:           lib.libraryName,
+            slug:           slug,
             collectionName: lib.name,
             type:           'components',
             variables:      [],

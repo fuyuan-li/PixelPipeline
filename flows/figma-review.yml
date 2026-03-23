@@ -138,8 +138,9 @@ definition:
           Base URL: https://design-tokens-api-sdzot2fiaq-uc.a.run.app
           Endpoint: GET <BASE_URL>?system=<slug>&resource=components
 
-          Slug mapping:
-            use slug = md3 for now.
+          Valid slugs: md3 | antd | carbon
+          The slug comes directly from the Figma export (designSystem.slug).
+          Do NOT guess or hardcode it.
 
           Each component in the response has:
             name              — human-readable name (e.g. "Button")
@@ -158,11 +159,12 @@ definition:
 
           Step 3: Call get_repository_file for that file (ref=source_branch).
             Base64-decode. Read the "designSystem" field at the root.
-            The field has: { name, type, ... }
-            The "name" field (e.g. "Material 3 Design Kit") tells you which DS.
+            The field has: { name, slug, type, ... }
+            - "name" (e.g. "Material Design 3") — human-readable, use in review text
+            - "slug" (e.g. "md3") — use directly as the API ?system= param
 
-          Step 4: Map the design system name to a slug (see mapping above).
-            If no slug can be determined, set slug = null.
+          Step 4: Use designSystem.slug directly as the slug for the API call.
+            If slug is null or missing, set slug = null.
 
           Step 5: If slug is not null:
             Call GET <BASE_URL>?system=<slug>&resource=components
