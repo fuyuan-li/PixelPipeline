@@ -48,8 +48,8 @@
   label:first-of-type { margin-top: 0; }
 
   input[type="text"],
-  input[type="url"],
-  input[type="password"] {
+  input[type="password"],
+  select {
     width: 100%;
     padding: 6px 8px;
     border: 1px solid #e0e0e0;
@@ -59,8 +59,29 @@
     outline: none;
     transition: border-color 0.15s;
     font-family: inherit;
+    background: #fff;
   }
-  input:focus { border-color: #18a0fb; box-shadow: 0 0 0 2px rgba(24,160,251,0.15); }
+  input:focus, select:focus { border-color: #18a0fb; box-shadow: 0 0 0 2px rgba(24,160,251,0.15); }
+  select:disabled { color: #aaa; background: #f5f5f5; }
+
+  .library-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .library-row select { flex: 1; }
+  .refresh-btn {
+    flex-shrink: 0;
+    padding: 6px 8px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background: #fafafa;
+    font-size: 11px;
+    cursor: pointer;
+    color: #555;
+    transition: background 0.15s;
+  }
+  .refresh-btn:hover { background: #e8e8e8; }
 
   .checkbox-row {
     display: flex;
@@ -192,8 +213,23 @@
   <label>Base Branch</label>
   <input type="text" id="baseBranch" placeholder="main" />
 
-  <label>Design System URL</label>
-  <input type="url" id="designSystemUrl" placeholder="https://m3.material.io/" />
+  <label>Design System</label>
+  <select id="librarySelect" onchange="onLibraryChange()">
+    <option value="">— Select a design system —</option>
+    <optgroup label="Common">
+      <option value="Material Design 3">Material Design 3 (Google)</option>
+      <option value="Apple Human Interface Guidelines">Apple HIG (iOS / macOS)</option>
+      <option value="Microsoft Fluent Design System">Microsoft Fluent Design</option>
+      <option value="Ant Design">Ant Design</option>
+      <option value="Carbon Design System">Carbon Design System (IBM)</option>
+      <option value="Atlassian Design System">Atlassian Design System</option>
+    </optgroup>
+    <optgroup label="Variable Collections" id="varCollectionsGroup" style="display:none"></optgroup>
+    <option value="__custom__">Custom…</option>
+  </select>
+  <input type="text" id="libraryCustom" placeholder="Type design system name…"
+         style="display:none; margin-top:6px" />
+  <div class="hint" id="libraryHint"></div>
 
   <hr>
 
@@ -238,6 +274,9 @@
   const GITLAB_BASE_URL = 'https://gitlab.com';
   const FLOW_ACCOUNT    = 'ai-figma-design-review-gitlab-ai-hackathon';
 
+  // ─── library state ────────────────────────────────────────────────────────
+  let savedLibraryName = '';
+
   // ─── tab switching ────────────────────────────────────────────────────────
   function switchTab(name) {
     document.querySelectorAll('.tab').forEach((t, i) => {
@@ -259,14 +298,81 @@
     el.className = 'status ' + (cls || '');
   }
 
+  // ─── library helpers ──────────────────────────────────────────────────────
+
+  // Show/hide the custom text input when user picks "Custom…"
+  function onLibraryChange() {
+    const sel    = document.getElementById('librarySelect');
+    const custom = document.getElementById('libraryCustom');
+    custom.style.display = sel.value === '__custom__' ? 'block' : 'none';
+  }
+
+  // Returns the canonical design-system name to send to the agent.
+  function getSelectedLibraryName() {
+    const sel = document.getElementById('librarySelect');
+    if (sel.value === '__custom__') {
+      return document.getElementById('libraryCustom').value.trim() || null;
+    }
+    return sel.value || null;
+  }
+
+  function getSelectedLibrary() {
+    const name = getSelectedLibraryName();
+    if (!name) return null;
+    return { key: null, name: name, libraryName: name, type: 'named' };
+  }
+
   function getSubmitValues() {
+    const lib = getSelectedLibrary();
     return {
-      projectPath:     document.getElementById('projectPath').value.trim(),
-      baseBranch:      document.getElementById('baseBranch').value.trim() || 'main',
-      designSystemUrl: document.getElementById('designSystemUrl').value.trim(),
-      token:           document.getElementById('token').value.trim(),
-      rememberToken:   document.getElementById('rememberToken').checked,
+      projectPath:         document.getElementById('projectPath').value.trim(),
+      baseBranch:          document.getElementById('baseBranch').value.trim() || 'main',
+      selectedLibrary:     lib,
+      selectedLibraryName: lib ? lib.name : '',
+      token:               document.getElementById('token').value.trim(),
+      rememberToken:       document.getElementById('rememberToken').checked,
     };
+  }
+
+  // Called on init and on refresh — adds any variable-collection libraries
+  // from the API as extra options in the dropdown (bonus, not required).
+  function populateLibraryDropdown(libraries) {
+    const group = document.getElementById('varCollectionsGroup');
+    group.innerHTML = '';
+    if (libraries && libraries.length > 0) {
+      group.style.display = '';
+      libraries.forEach(function(lib) {
+        const opt = document.createElement('option');
+        opt.value = lib.libraryName;   // use the name, not the key
+        opt.textContent = lib.libraryName + ' / ' + lib.name + ' (variable tokens)';
+        group.appendChild(opt);
+      });
+      document.getElementById('libraryHint').textContent =
+        libraries.length + ' variable collection' + (libraries.length !== 1 ? 's' : '') + ' also available above.';
+    } else {
+      group.style.display = 'none';
+      document.getElementById('libraryHint').textContent = '';
+    }
+    // Restore saved selection if it matches one of the options.
+    if (savedLibraryName) {
+      const sel = document.getElementById('librarySelect');
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === savedLibraryName) {
+          sel.selectedIndex = i;
+          onLibraryChange();
+          return;
+        }
+      }
+      // Saved name not in list → restore as custom.
+      sel.value = '__custom__';
+      document.getElementById('libraryCustom').value = savedLibraryName;
+      onLibraryChange();
+    }
+  }
+
+  function refreshLibraries() {
+    document.getElementById('libraryHint').textContent = 'Refreshing…';
+    parent.postMessage({ pluginMessage: { type: 'get-available-libraries' } }, '*');
   }
 
   // ─── receive messages from code.js ───────────────────────────────────────
@@ -276,14 +382,22 @@
 
     if (msg.type === 'init') {
       const s = msg.settings;
-      document.getElementById('projectPath').value     = s.projectPath;
-      document.getElementById('baseBranch').value      = s.baseBranch;
-      document.getElementById('designSystemUrl').value = s.designSystemUrl;
-      document.getElementById('reviewBranch').value    = s.lastReviewBranch;
+      document.getElementById('projectPath').value  = s.projectPath;
+      document.getElementById('baseBranch').value   = s.baseBranch;
+      document.getElementById('reviewBranch').value = s.lastReviewBranch;
+      savedLibraryName = s.savedLibraryName || '';
       if (s.token) {
         document.getElementById('token').value           = s.token;
         document.getElementById('rememberToken').checked = true;
       }
+    }
+
+    if (msg.type === 'available-libraries') {
+      if (msg.error) {
+        document.getElementById('libraryHint').textContent =
+          '⚠️ Could not load libraries: ' + msg.error;
+      }
+      populateLibraryDropdown(msg.libraries || []);
     }
 
     if (msg.type === 'figma-export') {
@@ -310,15 +424,20 @@
   // ─── SUBMIT: create MR flow ──────────────────────────────────────────────
   function createMR() {
     const v = getSubmitValues();
-    if (!v.token)           { setStatus('submitStatus', '❌ Token is required.', 'error'); return; }
-    if (!v.projectPath)     { setStatus('submitStatus', '❌ Project path is required.', 'error'); return; }
-    if (!v.designSystemUrl) { setStatus('submitStatus', '❌ Design System URL is required.', 'error'); return; }
+    if (!v.token)            { setStatus('submitStatus', '❌ Token is required.', 'error'); return; }
+    if (!v.projectPath)      { setStatus('submitStatus', '❌ Project path is required.', 'error'); return; }
+    if (!v.selectedLibrary)  { setStatus('submitStatus', '❌ Please select a design system.', 'error'); return; }
 
     document.getElementById('createBtn').disabled = true;
     setStatus('submitStatus', 'Exporting Figma data…');
 
     parent.postMessage({ pluginMessage: { type: 'save-settings', settings: v } }, '*');
-    parent.postMessage({ pluginMessage: { type: 'get-figma-export', designSystemUrl: v.designSystemUrl } }, '*');
+    parent.postMessage({
+      pluginMessage: {
+        type:            'get-figma-export',
+        selectedLibrary: v.selectedLibrary,
+      }
+    }, '*');
   }
 
   async function runGitLabFlow(figmaPayload) {
@@ -343,11 +462,17 @@
       if (!branchRes.ok) throw new Error(`Branch creation failed (${branchRes.status})`);
 
       const fileName  = `demo/figma-exports/${ts}.json`;
+      const dsName    = figmaPayload.designSystem
+        ? `${figmaPayload.designSystem.libraryName || figmaPayload.designSystem.name} / ${figmaPayload.designSystem.collectionName || ''}`
+        : '—';
+      const varCount  = figmaPayload.designSystem?.variables?.length || 0;
+
       const commitMsg = [
         'chore: add Figma design snapshot for review',
         '',
         `Page: ${figmaPayload.document?.pageName || '—'}`,
-        `Design System: ${figmaPayload.designSystemUrl}`,
+        `Design System: ${dsName}`,
+        `Variables exported: ${varCount}`,
       ].join('\n');
 
       setStatus('submitStatus', '📄 Committing Figma export…');
@@ -373,7 +498,7 @@
         `|---|---|`,
         `| **Page** | ${pageName} |`,
         `| **Exported at** | ${figmaPayload.exportedAt} |`,
-        `| **Design System** | ${figmaPayload.designSystemUrl} |`,
+        `| **Design System** | ${dsName} (${varCount} variables) |`,
         `| **Snapshot** | \`${fileName}\` |`,
         '',
         `---`,
@@ -399,7 +524,6 @@
         body: JSON.stringify({ body: `@${FLOW_ACCOUNT} please review this design update.` }),
       });
 
-      // Persist branch + MR IID so the Apply tab can use them.
       parent.postMessage({ pluginMessage: { type: 'save-review-ref', branch: reviewBranch, mrIid: mr.iid } }, '*');
       document.getElementById('reviewBranch').value = reviewBranch;
 
@@ -440,8 +564,8 @@
       if (!projRes.ok) throw new Error(`Project not found (${projRes.status})`);
       const proj = await projRes.json();
 
-      const filePath    = encodeURIComponent('demo/figma-fix-spec.json');
-      const specRes     = await fetch(
+      const filePath = encodeURIComponent('demo/figma-fix-spec.json');
+      const specRes  = await fetch(
         `${api}/projects/${proj.id}/repository/files/${filePath}?ref=${encodeURIComponent(branch)}`,
         { headers: h }
       );

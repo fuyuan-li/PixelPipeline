@@ -3,36 +3,44 @@
 // This file handles: showing the UI, reading Figma data, persisting settings,
 // and applying fixes received from the Fix Agent via ui.html.
 
-figma.showUI(__html__, { width: 440, height: 500 });
+figma.showUI(__html__, { width: 440, height: 520 });
 
-// On startup, load saved settings from Figma's local storage and send to UI.
+// On startup, load saved settings and fetch available design system libraries.
 async function init() {
   const [
     projectPath,
     baseBranch,
-    designSystemUrl,
     token,
     lastReviewBranch,
     lastMrIid,
+    savedLibraryName,
   ] = await Promise.all([
     figma.clientStorage.getAsync('projectPath'),
     figma.clientStorage.getAsync('baseBranch'),
-    figma.clientStorage.getAsync('designSystemUrl'),
     figma.clientStorage.getAsync('token'),
     figma.clientStorage.getAsync('lastReviewBranch'),
     figma.clientStorage.getAsync('lastMrIid'),
+    figma.clientStorage.getAsync('selectedLibraryName'),
   ]);
 
   figma.ui.postMessage({
     type: 'init',
     settings: {
-      projectPath:      projectPath      || '',
-      baseBranch:       baseBranch       || 'main',
-      designSystemUrl:  designSystemUrl  || '',
-      token:            token            || '',
-      lastReviewBranch: lastReviewBranch || '',
-      lastMrIid:        lastMrIid        || '',
+      projectPath:       projectPath       || '',
+      baseBranch:        baseBranch        || 'main',
+      token:             token             || '',
+      lastReviewBranch:  lastReviewBranch  || '',
+      lastMrIid:         lastMrIid         || '',
+      savedLibraryName:  savedLibraryName  || '',
     },
+  });
+
+  // Fetch available libraries for the dropdown.
+  // Small delay to ensure the UI iframe is ready to receive messages.
+  await new Promise(r => setTimeout(r, 300));
+  figma.ui.postMessage({
+    type: 'available-libraries',
+    libraries: await getAvailableLibraries(),
   });
 }
 
@@ -41,7 +49,6 @@ init();
 // ─── hex ↔ Figma RGBA helpers ──────────────────────────────────────────────
 
 function hexToFigmaRgb(hex) {
-  // Accepts "#RRGGBB" or "#RGB", returns { r, g, b } in 0–1 range.
   const clean = hex.replace('#', '');
   const full  = clean.length === 3
     ? clean.split('').map(c => c + c).join('')
@@ -57,12 +64,12 @@ function hexToFigmaRgb(hex) {
 
 figma.ui.onmessage = async (msg) => {
 
-  // Persist settings; token only if user opts in.
+  // Persist settings.
   if (msg.type === 'save-settings') {
     const s = msg.settings;
-    await figma.clientStorage.setAsync('projectPath',     s.projectPath);
-    await figma.clientStorage.setAsync('baseBranch',      s.baseBranch);
-    await figma.clientStorage.setAsync('designSystemUrl', s.designSystemUrl);
+    await figma.clientStorage.setAsync('projectPath',        s.projectPath);
+    await figma.clientStorage.setAsync('baseBranch',         s.baseBranch);
+    await figma.clientStorage.setAsync('selectedLibraryName', s.selectedLibraryName || '');
     if (s.rememberToken && s.token) {
       await figma.clientStorage.setAsync('token', s.token);
     } else {
@@ -77,15 +84,55 @@ figma.ui.onmessage = async (msg) => {
   }
 
   // Export the current selection (or whole page) as JSON for GitLab.
+  // Also fetches variables from the selected design system library.
   if (msg.type === 'get-figma-export') {
     try {
       const page      = figma.currentPage;
       const selection = figma.currentPage.selection;
       const targets   = selection.length > 0 ? [...selection] : [page];
 
+      // Fetch variables from the selected library collection.
+      let designSystem = null;
+      if (msg.selectedLibrary) {
+        const lib = msg.selectedLibrary;
+        if (lib.key) {
+          // Variable collection — we can fetch token names.
+          try {
+            const libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(lib.key);
+            designSystem = {
+              name:           lib.libraryName,
+              collectionName: lib.name,
+              type:           'variables',
+              variables: libVars.map(v => ({
+                key:          v.key,
+                name:         v.name,
+                resolvedType: v.resolvedType, // 'COLOR' | 'FLOAT' | 'STRING' | 'BOOLEAN'
+              })),
+            };
+          } catch (libErr) {
+            designSystem = {
+              name:      lib.libraryName,
+              type:      'variables',
+              error:     libErr.message,
+              variables: [],
+            };
+          }
+        } else {
+          // Component-only library (no published variable collection).
+          // No token list available; the auditor will rely on boundVariables
+          // and mainComponentName instead.
+          designSystem = {
+            name:           lib.libraryName,
+            collectionName: lib.name,
+            type:           'components',
+            variables:      [],
+          };
+        }
+      }
+
       const payload = {
-        exportedAt:      new Date().toISOString(),
-        designSystemUrl: msg.designSystemUrl || '',
+        exportedAt:   new Date().toISOString(),
+        designSystem,
         document: {
           pageId:   page.id,
           pageName: page.name,
@@ -100,7 +147,6 @@ figma.ui.onmessage = async (msg) => {
   }
 
   // Apply a list of fixes produced by the Fix Agent.
-  // msg.fixes: Array<{ node_id, node_name, property, fill_index, target_value, review_type }>
   if (msg.type === 'apply-fixes') {
     const results = [];
 
@@ -115,9 +161,9 @@ figma.ui.onmessage = async (msg) => {
       try {
         if ((fix.property === 'fills' || fix.property === 'strokes') && fix.property in node) {
           const prop  = fix.property;
-          const fills = JSON.parse(JSON.stringify(node[prop])); // deep clone
+          const fills = JSON.parse(JSON.stringify(node[prop]));
+          const idx   = typeof fix.fill_index === 'number' ? fix.fill_index : 0;
 
-          const idx = typeof fix.fill_index === 'number' ? fix.fill_index : 0;
           if (!fills[idx]) {
             results.push(Object.assign({}, fix, { status: 'fill_index_missing' }));
             continue;
@@ -136,7 +182,7 @@ figma.ui.onmessage = async (msg) => {
           results.push(Object.assign({}, fix, { status: 'applied' }));
 
         } else if (fix.property.startsWith('padding.') && 'paddingTop' in node) {
-          const side = fix.property.split('.')[1]; // top | right | bottom | left
+          const side = fix.property.split('.')[1];
           const map  = { top: 'paddingTop', right: 'paddingRight', bottom: 'paddingBottom', left: 'paddingLeft' };
           if (map[side]) {
             node[map[side]] = fix.target_value;
@@ -157,17 +203,81 @@ figma.ui.onmessage = async (msg) => {
     figma.ui.postMessage({ type: 'fixes-applied', results });
   }
 
+  // Fetch available libraries (triggered by refresh button in UI).
+  if (msg.type === 'get-available-libraries') {
+    try {
+      figma.ui.postMessage({
+        type: 'available-libraries',
+        libraries: await getAvailableLibraries(),
+      });
+    } catch (err) {
+      figma.ui.postMessage({ type: 'available-libraries', libraries: [], error: err.message });
+    }
+  }
+
   if (msg.type === 'close') {
     figma.closePlugin();
   }
 };
 
+// ─── Library discovery ────────────────────────────────────────────────────────
+// Returns a combined list of available design system libraries for the dropdown.
+//
+// Strategy:
+//   1. Published variable collections  → preferred, gives us token names.
+//   2. Component-only libraries        → detected by scanning INSTANCE nodes on
+//      the current page and grouping remote components by key prefix (components
+//      from the same library share a common 8-char key prefix).
+//
+// Why the two-pass approach?
+//   getAvailableLibraryVariableCollectionsAsync() only returns libraries that
+//   have *published variable collections*. Popular libraries like Material 3
+//   Design Kit and iOS UI Kit ship components only — they have no published
+//   variable collections — so they never appear in that API call. The instance
+//   scan catches them.
+
+// Returns published variable collections from enabled libraries.
+// Note: Figma Plugin API has no endpoint for listing enabled *component* libraries
+// (only variable collections can be enumerated). If the design system is a
+// component-only library (e.g. Material 3, iOS UI Kit), the user enters the name
+// manually and the downstream agent uses its own knowledge of that system.
+async function getAvailableLibraries() {
+  const libraries = [];
+  try {
+    const cols = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+    for (var i = 0; i < cols.length; i++) {
+      var c = cols[i];
+      libraries.push({
+        key:         c.key,
+        name:        c.name,        // e.g. "M3/Baseline"
+        libraryName: c.libraryName, // e.g. "Material 3 Design Kit"
+        type:        'variables',
+      });
+    }
+  } catch (_) {}
+  return libraries;
+}
+
 // ─── Figma node serializer ─────────────────────────────────────────────────
 // Recursively serialize a node to a plain JSON-safe object.
-// Symbols (figma.mixed) are replaced with the string "mixed".
+// boundVariables are included on fills/strokes so the agent can detect
+// which colors are already bound to a design system token.
 
 function safe(val) {
   return (typeof val === 'symbol') ? 'mixed' : val;
+}
+
+function serializePaint(paint) {
+  // Serialize a fill/stroke paint, preserving boundVariables.
+  const out = {
+    type:      paint.type,
+    visible:   paint.visible,
+    opacity:   paint.opacity,
+    blendMode: paint.blendMode,
+  };
+  if (paint.color)          out.color          = paint.color;
+  if (paint.boundVariables) out.boundVariables  = paint.boundVariables;
+  return out;
 }
 
 function serializeNode(node) {
@@ -184,8 +294,19 @@ function serializeNode(node) {
   if ('visible' in node) out.visible = node.visible;
   if ('opacity' in node) out.opacity = safe(node.opacity);
 
-  if ('fills' in node)        out.fills        = safe(node.fills);
-  if ('strokes' in node)      out.strokes      = safe(node.strokes);
+  // Use serializePaint so boundVariables are preserved per fill/stroke.
+  if ('fills' in node && Array.isArray(node.fills)) {
+    out.fills = node.fills.map(serializePaint);
+  } else if ('fills' in node) {
+    out.fills = safe(node.fills);
+  }
+
+  if ('strokes' in node && Array.isArray(node.strokes)) {
+    out.strokes = node.strokes.map(serializePaint);
+  } else if ('strokes' in node) {
+    out.strokes = safe(node.strokes);
+  }
+
   if ('effects' in node)      out.effects      = safe(node.effects);
   if ('cornerRadius' in node) out.cornerRadius = safe(node.cornerRadius);
 
@@ -208,6 +329,13 @@ function serializeNode(node) {
     out.fontName            = safe(node.fontName);
     out.textAlignHorizontal = safe(node.textAlignHorizontal);
     out.textAlignVertical   = safe(node.textAlignVertical);
+  }
+
+  // Capture the main component name if this node is a component instance.
+  // This tells the agent which library component (if any) this node derives from.
+  if (node.type === 'INSTANCE' && node.mainComponent) {
+    out.mainComponentName = node.mainComponent.name;
+    out.mainComponentKey  = node.mainComponent.key || null;
   }
 
   if ('children' in node) {

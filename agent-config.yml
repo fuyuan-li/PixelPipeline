@@ -4,3 +4,5 @@ network_policy:
     - m3.material.io
     - "*.material.io"
     - developer.apple.com/design/human-interface-guidelines
+    # Design Tokens API (Cloud Function — update region/project after deployment)
+    - "*.cloudfunctions.net"
