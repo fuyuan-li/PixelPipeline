@@ -46,6 +46,113 @@ async function init() {
 
 init();
 
+// ─── Component replacement helper ─────────────────────────────────────────
+//
+// Strategy for finding the right library component:
+//   1. Search all INSTANCE nodes on the current page for a mainComponent whose
+//      name contains fix.figma_search_name. If found, import by key and replace.
+//   2. If not found on page, try all pages (some teams place a component
+//      showcase page where all library components are instanced).
+//   3. If still not found, report "component_not_found" with guidance so the
+//      designer knows to place one instance of the target component first.
+//
+// Why this approach?
+//   figma.importComponentByKeyAsync(key) requires the Figma component key, which
+//   is unique to each published library file. Rather than hardcoding keys (which
+//   change when a library is republished), we discover the key at runtime by
+//   scanning existing instances. This works as long as the library is enabled
+//   and at least one instance of the target component exists somewhere in the file.
+
+async function applyComponentFix(fix, node, results) {
+  const searchName = (fix.figma_search_name || fix.inferred_component || '').toLowerCase();
+
+  // ── Step 1: Search all instances on all pages for a matching component key
+  let targetKey  = null;
+  let targetName = null;
+
+  const pagesToSearch = [figma.currentPage].concat(
+    figma.root.children.filter(p => p !== figma.currentPage)
+  );
+
+  outer:
+  for (var pi = 0; pi < pagesToSearch.length; pi++) {
+    var page = pagesToSearch[pi];
+    var instances;
+    try {
+      instances = page.findAllWithCriteria({ types: ['INSTANCE'] });
+    } catch (_) {
+      instances = page.findAll(function(n) { return n.type === 'INSTANCE'; });
+    }
+    for (var ii = 0; ii < instances.length; ii++) {
+      var inst = instances[ii];
+      if (inst.mainComponent) {
+        var compName = inst.mainComponent.name.toLowerCase();
+        if (compName.indexOf(searchName) !== -1) {
+          targetKey  = inst.mainComponent.key;
+          targetName = inst.mainComponent.name;
+          break outer;
+        }
+      }
+    }
+  }
+
+  if (!targetKey) {
+    // Couldn't find a matching component instance in the file.
+    results.push(Object.assign({}, fix, {
+      status:  'component_not_found',
+      message: 'No instance of "' + (fix.target_component_name || fix.figma_search_name) + '" found in this file. ' +
+               'To apply this fix: (1) enable the ' + (fix.target_component_name || 'design system') + ' library, ' +
+               '(2) place one instance of the "' + (fix.figma_search_name || fix.inferred_component) + '" component anywhere on the canvas, ' +
+               'then click Apply Fixes again.',
+    }));
+    return;
+  }
+
+  // ── Step 2: Import the component and create an instance
+  var comp     = await figma.importComponentByKeyAsync(targetKey);
+  var instance = comp.createInstance();
+
+  // Position at the same location as the original node
+  instance.x = node.x;
+  instance.y = node.y;
+
+  // Try to preserve width; height is driven by the component spec so we only
+  // override it if the component explicitly supports resizing.
+  try {
+    instance.resize(
+      fix.node_width  || node.width  || instance.width,
+      fix.node_height || node.height || instance.height
+    );
+  } catch (_) {
+    // Some components don't allow arbitrary resize — that's fine.
+  }
+
+  // ── Step 3: Replace the original node
+  var parent = node.parent;
+  if (parent) {
+    var idx = parent.children.indexOf(node);
+    if (idx !== -1) {
+      parent.insertChild(idx, instance);
+    } else {
+      parent.appendChild(instance);
+    }
+    node.remove();
+    results.push(Object.assign({}, fix, {
+      status:           'applied',
+      applied_component: targetName,
+    }));
+  } else {
+    // Node has no parent (unusual); append to current page instead.
+    figma.currentPage.appendChild(instance);
+    node.remove();
+    results.push(Object.assign({}, fix, {
+      status:           'applied',
+      applied_component: targetName,
+      note:             'Node had no parent; instance appended to current page.',
+    }));
+  }
+}
+
 // ─── hex ↔ Figma RGBA helpers ──────────────────────────────────────────────
 
 function hexToFigmaRgb(hex) {
@@ -151,6 +258,26 @@ figma.ui.onmessage = async (msg) => {
     const results = [];
 
     for (const fix of msg.fixes) {
+
+      // ── Component replacement fix ────────────────────────────────────────
+      // This is handled separately because it may need to remove the original
+      // node and insert a new instance; we don't need to look up the node first
+      // (the node may not exist yet if we're doing a dry-run preview).
+      if (fix.property === 'component' || fix.fix_type === 'component') {
+        const node = figma.getNodeById(fix.node_id);
+        if (!node) {
+          results.push(Object.assign({}, fix, { status: 'not_found' }));
+          continue;
+        }
+        try {
+          await applyComponentFix(fix, node, results);
+        } catch (err) {
+          results.push(Object.assign({}, fix, { status: 'error', error: err.message }));
+        }
+        continue;
+      }
+
+      // ── Property-level fixes (color, font, layout) ───────────────────────
       const node = figma.getNodeById(fix.node_id);
 
       if (!node) {
@@ -336,6 +463,49 @@ function serializeNode(node) {
   if (node.type === 'INSTANCE' && node.mainComponent) {
     out.mainComponentName = node.mainComponent.name;
     out.mainComponentKey  = node.mainComponent.key || null;
+  }
+
+  // ── Structural summary for component inference ──────────────────────────
+  // Give the agent a quick structural fingerprint without requiring full
+  // recursive traversal. These hints help the component_auditor apply its
+  // semantic inference rules without reading every leaf node.
+  if ('children' in node && node.children.length > 0) {
+    var childTypes  = {};
+    var hasText     = false;
+    var hasIcon     = false;  // VECTOR, BOOLEAN_OPERATION used as icons
+    var hasImage    = false;  // RECTANGLE with image fill, or image node
+    var textContent = [];
+
+    function scanChildren(children) {
+      for (var i = 0; i < children.length; i++) {
+        var c = children[i];
+        var t = c.type || '';
+        childTypes[t] = (childTypes[t] || 0) + 1;
+        if (t === 'TEXT') {
+          hasText = true;
+          if (c.characters) textContent.push(c.characters);
+        }
+        if (t === 'VECTOR' || t === 'BOOLEAN_OPERATION' || t === 'STAR' || t === 'POLYGON') {
+          hasIcon = true;
+        }
+        if (c.fills && c.fills.some && c.fills.some(function(f) { return f.type === 'IMAGE'; })) {
+          hasImage = true;
+        }
+        if ('children' in c && c.children) {
+          scanChildren(c.children);
+        }
+      }
+    }
+    scanChildren(node.children);
+
+    out.structural_summary = {
+      child_count:      node.children.length,
+      child_types:      childTypes,
+      has_text_child:   hasText,
+      has_icon_child:   hasIcon,
+      has_image_child:  hasImage,
+      text_content:     textContent.slice(0, 5),  // first 5 text strings for context
+    };
   }
 
   if ('children' in node) {

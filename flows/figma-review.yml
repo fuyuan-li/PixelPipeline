@@ -49,6 +49,21 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
+    - name: "component_auditor"
+      type: AgentComponent
+      prompt_id: "component_auditor_prompt"
+      inputs:
+        - "context:goal"
+        - "context:project_id"
+      toolset:
+        - get_merge_request
+        - list_repository_tree
+        - get_repository_file
+        - create_commit
+      ui_log_events:
+        - on_agent_final_answer
+        - on_tool_execution_success
+
     - name: "review_writer"
       type: AgentComponent
       prompt_id: "review_writer_prompt"
@@ -69,6 +84,8 @@ definition:
     - from: "design_system_agent"
       to: "design_auditor"
     - from: "design_auditor"
+      to: "component_auditor"
+    - from: "component_auditor"
       to: "review_writer"
     - from: "review_writer"
       to: "end"
@@ -104,8 +121,8 @@ definition:
       prompt_template:
         system: |
           You are the Design System Agent for the Figma Design Review pipeline.
-          Your job is to fetch real token data from the Design Tokens API and
-          commit it as a standards file for downstream agents to use.
+          Your job is to fetch BOTH token data AND component specs from the Design Tokens API,
+          then commit them as a standards file for downstream agents to use.
 
           DESIGN TOKENS API
           Base URL: https://design-tokens-api-sdzot2fiaq-uc.a.run.app
@@ -132,10 +149,17 @@ definition:
             - Contains "Carbon" or "IBM"                 → carbon
             - Anything else                              → no slug (skip API call)
 
-          Step 6: If a slug was found, fetch tokens from the API:
-            GET <BASE_URL>?system=<slug>&type=COLOR
-          Parse the JSON response. Use the "tokens" array.
-          If the API is unavailable or returns an error, set tokens to [].
+          Step 6: If a slug was found, make TWO API calls:
+
+            6a. Fetch color tokens:
+                GET <BASE_URL>?system=<slug>&resource=tokens&type=COLOR
+                Parse the JSON. Use the "tokens" array.
+
+            6b. Fetch component specs:
+                GET <BASE_URL>?system=<slug>&resource=components
+                Parse the JSON. Use the "components" array.
+
+            If either API call fails or returns an error, use [] for that field.
 
           Step 7: Call create_commit with:
             project_id: {{project_id}}
@@ -154,11 +178,26 @@ definition:
             "token_source":   "Design Tokens API" or "none",
             "variables": [
               { "name": "md.sys.color.primary", "value": "#6750A4", "type": "COLOR", "group": "color" }
+            ],
+            "components": [
+              {
+                "name": "Button",
+                "figma_search_name": "Button",
+                "variants": [
+                  { "name": "Filled Button", "figma_name": "Button/Filled Button" }
+                ],
+                "detection": {
+                  "name_keywords": ["button", "btn"],
+                  "node_types": ["FRAME"],
+                  "height_range": [32, 56],
+                  "notes": "..."
+                }
+              }
             ]
           }
 
           If designSystem is null/missing, commit:
-          { "error": "No design system selected.", "variables": [] }
+          { "error": "No design system selected.", "variables": [], "components": [] }
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -172,9 +211,8 @@ definition:
       prompt_template:
         system: |
           You are the Design Auditor for the Figma Design Review pipeline.
-          You audit the designer's work against the design system standards —
-          similar to a linter, but for design. You flag detached colors, missing
-          token bindings, and elements that should use library components.
+          You audit color usage — flagging detached colors and suggesting design token bindings.
+          (Component-level audit is handled by the separate Component Auditor agent.)
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
@@ -183,7 +221,7 @@ definition:
           Step 3: Call get_repository_file (project_id,
           file_path="demo/design-system-standards.json", ref=source_branch).
           Base64-decode to get the design system standards.
-          Read the "variables" array — these are the available tokens
+          Read the "variables" array — these are the available color tokens
           (each has: name, value, type, group).
           Also note the top-level "name" and "slug" fields.
           If the file has an "error" field, note it and continue without token validation.
@@ -195,20 +233,19 @@ definition:
           file_path="demo/figma-exports/<filename>", ref=source_branch).
           Base64-decode to get the Figma export JSON. Read the "nodes" array.
 
-          Step 6: Audit the design:
+          Step 6: Audit colors in the design:
 
-          A. Traverse all nodes recursively.
-             For each node with fills or strokes of type SOLID:
-             - If fills[i].boundVariables.color has a value → token bound ✅, skip.
-             - If fills[i].boundVariables is empty ({}) → detached color ⚠️.
-               Convert the RGBA (0–1 floats) to #RRGGBB.
-               Find the closest matching variable from the standards "variables" list
-               based on name semantics (e.g. a purple fill → "M3/sys/color/primary").
-
-          B. For INSTANCE nodes: mainComponentName is set → already a library component ✅.
-             For FRAME or GROUP nodes whose name suggests a UI pattern (e.g. "Button",
-             "Card", "Nav Bar", "Dialog") but are NOT instances → flag as a candidate
-             for replacement with a library component ℹ️.
+          Traverse all nodes recursively.
+          For each node with fills or strokes of type SOLID:
+            - If fills[i].boundVariables.color has a value → token bound ✅, skip.
+            - If fills[i].boundVariables is empty ({}) → detached color ⚠️.
+              Convert the RGBA (0–1 floats) to #RRGGBB.
+              Find the closest matching variable from the standards "variables" list.
+              Use both name semantics AND color value proximity:
+                e.g. #FFFFFF → look for "on-primary", "background", or "surface" tokens
+                e.g. #000000 → look for "on-background", "on-surface" tokens
+                e.g. #D9D9D9 → look for "outline-variant", "surface-variant" tokens
+                e.g. #6750A4 → look for "primary" token
 
           Step 7: Call create_commit with:
             project_id: {{project_id}}
@@ -227,8 +264,7 @@ definition:
             "summary": {
               "total_nodes_reviewed": N,
               "tokens_bound": N,
-              "detached_colors": N,
-              "non_component_frames": N
+              "detached_colors": N
             },
             "findings": [
               {
@@ -237,14 +273,137 @@ definition:
                 "property":        "fills",
                 "fill_index":      0,
                 "current_hex":     "#65558F",
-                "suggested_token": "M3/sys/color/primary",
+                "suggested_token": "md.sys.color.primary",
+                "target_hex":      "#6750A4",
                 "severity":        "warning",
-                "reason":          "Color is detached. Closest token: M3/sys/color/primary"
+                "reason":          "Color #65558F is detached. Closest token: md.sys.color.primary (#6750A4)"
               }
             ]
           }
 
-          If no issues are found, commit with an empty findings array.
+          If no color issues are found, commit with an empty findings array.
+        user: |
+          Project ID: {{project_id}}
+          Goal: {{goal}}
+        placeholder: history
+      unit_primitives: []
+      params:
+        timeout: 300
+
+    - prompt_id: "component_auditor_prompt"
+      name: "Component Auditor Prompt"
+      prompt_template:
+        system: |
+          You are the Component Auditor for the Figma Design Review pipeline.
+          Your job is to identify FRAME, GROUP, and RECTANGLE nodes that should be replaced
+          with proper library components from the design system.
+
+          You reason about the SEMANTIC PURPOSE of each node — not just its name.
+          A node named "Rectangle 4" with height=1 IS a Divider.
+          A node named "Section 4" with 3–5 icon+text children IS a Navigation Bar.
+          A node named "Song 1" that is a FRAME containing text and a thumbnail IS a List Item.
+
+          Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
+
+          Step 2: Call get_merge_request (project_id, merge_request_iid). Note source_branch.
+
+          Step 3: Call get_repository_file (project_id,
+          file_path="demo/design-system-standards.json", ref=source_branch).
+          Base64-decode. Read the "components" array — these are the MD3 component specs
+          with detection rules (name_keywords, node_types, height_range, etc.).
+
+          Step 4: Call list_repository_tree (project_id, ref=source_branch,
+          path="demo/figma-exports"). Find the .json filename.
+
+          Step 5: Call get_repository_file (project_id,
+          file_path="demo/figma-exports/<filename>", ref=source_branch).
+          Base64-decode to get the Figma export JSON.
+
+          Step 6: Traverse all nodes recursively and apply these inference rules:
+
+          RULE 1 — Divider:
+            Match if: node.type is RECTANGLE or FRAME or LINE, AND
+              (node.height <= 4 OR (node.width > 100 AND node.height <= 4))
+            OR: node.name (lowercased) contains "rectangle" AND node.height <= 4
+            → Inferred component: "Divider", figma_search_name: "Divider"
+            → severity: "warning" (raw rectangles used as dividers don't support theming)
+
+          RULE 2 — List Item:
+            Match if: node.type is FRAME, AND
+              node.height is between 48 and 88, AND node.width >= 200, AND
+              node has at least one TEXT child (in immediate or nested children), AND
+              (node.name lowercased contains "song", "track", "item", "row", "list",
+               OR node appears multiple times with similar structure as siblings)
+            → Inferred component: "List Item", figma_search_name: "List Item"
+            → severity: "info"
+
+          RULE 3 — Navigation Bar:
+            Match if: node.type is FRAME, AND
+              node.height is between 56 and 96, AND node.width >= 300, AND
+              node has 3–5 children that each contain both a text element AND
+              an icon/vector/image element (horizontally arranged),
+              OR node.name (lowercased) contains "nav", "navigation", "tab bar", "section 4"
+            → Inferred component: "Navigation Bar", figma_search_name: "Navigation Bar"
+            → severity: "warning"
+
+          RULE 4 — Button:
+            Match if: node.type is FRAME or RECTANGLE, AND
+              node.height is between 32 and 56, AND node.width is between 64 and 240, AND
+              node has a TEXT child, AND
+              node.name (lowercased) contains "button", "btn", "cta", "action"
+            → Inferred component: "Button", figma_search_name: "Button"
+            → severity: "warning"
+
+          RULE 5 — Top App Bar:
+            Match if: node.type is FRAME, AND
+              node.height is between 56 and 112, AND node.width >= 300, AND
+              (node.name lowercased contains "section", "header", "top bar", "app bar",
+               OR it is positioned at the top of the screen (y <= 100))
+            → Inferred component: "Top App Bar", figma_search_name: "Top App Bar"
+            → severity: "info"
+
+          SKIP if:
+            - node.type is INSTANCE (already a library component) ✅
+            - node.type is TEXT (text nodes are not components)
+            - node is the top-level page/frame (e.g. "iPhone 13 & 14 - 2")
+
+          Step 7: Call create_commit with:
+            project_id: {{project_id}}
+            branch: source_branch
+            commit_message: "chore: component audit results [skip ci]"
+            actions: [{
+              action: "create",
+              file_path: "demo/component-fix-plan.json",
+              content: <JSON string>
+            }]
+
+          The JSON to commit:
+          {
+            "generated_at": "<ISO timestamp>",
+            "design_system": "<name from standards>",
+            "summary": {
+              "total_nodes_reviewed": N,
+              "already_components": N,
+              "should_be_components": N
+            },
+            "findings": [
+              {
+                "node_id":               "123:456",
+                "node_name":             "Rectangle 4",
+                "node_type":             "RECTANGLE",
+                "node_width":            375,
+                "node_height":           1,
+                "inferred_component":    "Divider",
+                "target_component_name": "Divider/Divider",
+                "figma_search_name":     "Divider",
+                "severity":              "warning",
+                "reason":                "This 1px rectangle is used as a visual divider. Replace with the MD3 Divider component to inherit correct theming and spacing."
+              }
+            ]
+          }
+
+          If no component issues are found, commit with an empty findings array.
+          Be thorough — check EVERY non-INSTANCE frame and rectangle, no matter how small.
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -258,68 +417,102 @@ definition:
       prompt_template:
         system: |
           You are the Review Writer for the Figma Design Review pipeline.
-          You take the Design Auditor's findings and produce two outputs:
-          1. A Figma Fix Spec (machine-readable JSON for the plugin to apply fixes)
-          2. A human-readable MR comment summarising the review for the designer
+          You read BOTH the color audit results AND the component audit results,
+          then produce:
+          1. A unified Figma Fix Spec (machine-readable JSON for the plugin to apply ALL fixes)
+          2. A single human-readable MR comment summarising the full review
 
           Step 1: Parse merge_request_iid from goal: "... Context: {MergeRequest IID: N}"
 
           Step 2: Call get_merge_request. Note source_branch.
 
-          Step 3: Call get_repository_file (project_id,
-          file_path="demo/audit-results.json", ref=source_branch).
-          Base64-decode to get the audit results.
+          Step 3: Call get_repository_file for "demo/audit-results.json" (color findings).
+          Base64-decode.
 
-          Step 4: Build the Figma Fix Spec from findings where suggested_token is set:
+          Step 4: Call get_repository_file for "demo/component-fix-plan.json" (component findings).
+          Base64-decode.
+
+          Step 5: Build the unified Figma Fix Spec. It has two types of entries:
+
+          COLOR fixes (from audit-results.json findings):
+          {
+            "node_id":      "123:456",
+            "node_name":    "Primary Button",
+            "fix_type":     "color",
+            "property":     "fills",
+            "fill_index":   0,
+            "target_value": "#6750A4",
+            "token_name":   "md.sys.color.primary",
+            "severity":     "warning",
+            "reason":       "Color #65558F is detached. Closest token: md.sys.color.primary"
+          }
+
+          COMPONENT fixes (from component-fix-plan.json findings):
+          {
+            "node_id":               "123:456",
+            "node_name":             "Rectangle 4",
+            "fix_type":              "component",
+            "property":              "component",
+            "inferred_component":    "Divider",
+            "target_component_name": "Divider/Divider",
+            "figma_search_name":     "Divider",
+            "node_width":            375,
+            "node_height":           1,
+            "severity":              "warning",
+            "reason":                "This 1px rectangle is a visual divider. Replace with MD3 Divider component."
+          }
+
+          Full fix spec structure:
           {
             "generated_at": "<ISO timestamp>",
             "mr_iid": <merge_request_iid>,
             "source_branch": "<source_branch>",
-            "fixes": [
-              {
-                "node_id":     "123:456",
-                "node_name":   "Primary Button",
-                "property":    "fills",
-                "fill_index":  0,
-                "target_value": "#6750A4",
-                "token_name":  "M3/sys/color/primary",
-                "severity":    "warning",
-                "reason":      "Color is detached. Closest token: M3/sys/color/primary"
-              }
-            ]
+            "fixes": [ ...color fixes..., ...component fixes... ]
           }
 
-          Step 5: Call create_commit with:
+          Step 6: Call create_commit with:
             project_id: {{project_id}}
             branch: source_branch
             commit_message: "chore: figma fix spec [skip ci]"
             actions: [{ action: "create", file_path: "demo/figma-fix-spec.json",
-                        content: <JSON string from step 4> }]
+                        content: <JSON string from step 5> }]
 
-          Step 6: Call create_merge_request_note ONCE with this format:
+          Step 7: Call create_merge_request_note ONCE with this format:
 
           ## 🎨 Design Review
 
+          ### 🎨 Color Issues
           | Element | Current | Suggested Token | Status |
           |---------|---------|-----------------|--------|
-          | <node_name> | <current_hex> | <suggested_token> | ⚠️ |
+          | <node_name> | <current_hex> | <suggested_token> (<target_hex>) | ⚠️ |
 
-          **Summary:** N tokens bound ✅ · N detached colors ⚠️ · N frames to componentise ℹ️
+          (If no color issues, write: "✅ All colors are bound to design tokens.")
+
+          ### 🧩 Component Issues
+          | Element | Type | Inferred As | Suggested Component | Status |
+          |---------|------|-------------|---------------------|--------|
+          | <node_name> | <node_type> | <inferred_component> | <target_component_name> | ⚠️ |
+
+          (If no component issues, write: "✅ All elements use library components.")
+
+          ---
+          **Summary:** N tokens bound ✅ · N detached colors ⚠️ · N elements to componentise ⚠️
 
           **Recommendations**
-          1. <Drawn from the reason field of each finding>
+          1. <Drawn from the reason fields of color findings>
+          2. <Drawn from the reason fields of component findings>
 
-          > Design system: <design_system field>
+          > Design system: <design_system field from audit-results>
           > *Apply fixes via the Figma CI plugin → Apply Fixes tab.*
 
-          Legend: ✅ Token bound · ⚠️ Detached color · ℹ️ Consider using library component
+          Legend: ✅ OK · ⚠️ Needs fix
 
-          If findings is empty, post:
-          "✅ **Design looks good!** All reviewed colors are bound to design system tokens."
+          End the comment with:
+          "🔧 **X fixes ready** (Y color · Z component). Open the Figma plugin → **Apply Fixes** tab to apply."
+          (X = total fixes, Y = color fix count, Z = component fix count)
 
-          Otherwise end with:
-          "🔧 **X fixes ready.** Open the Figma plugin → **Apply Fixes** tab to apply."
-          (X = number of entries in the fix spec)
+          If ALL findings are empty across both audits, post:
+          "✅ **Design looks great!** All colors are token-bound and all elements use library components."
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}

@@ -1,0 +1,713 @@
+{
+  "system": "Material Design 3",
+  "slug": "md3",
+  "version": "baseline-light",
+  "source": "material-foundation/material-tokens (GitHub)",
+  "tokens": [
+    {
+      "name": "md.ref.palette.error0",
+      "value": "#000000",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error10",
+      "value": "#410e0b",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error20",
+      "value": "#601410",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error30",
+      "value": "#8c1d18",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error40",
+      "value": "#b3261e",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error50",
+      "value": "#dc362e",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error60",
+      "value": "#e46962",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error70",
+      "value": "#ec928e",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error80",
+      "value": "#f2b8b5",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error90",
+      "value": "#f9dedc",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error95",
+      "value": "#fceeee",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error99",
+      "value": "#fffbf9",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.error100",
+      "value": "#ffffff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary0",
+      "value": "#000000",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary10",
+      "value": "#31111d",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary20",
+      "value": "#492532",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary30",
+      "value": "#633b48",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary40",
+      "value": "#7d5260",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary50",
+      "value": "#986977",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary60",
+      "value": "#b58392",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary70",
+      "value": "#d29dac",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary80",
+      "value": "#efb8c8",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary90",
+      "value": "#ffd8e4",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary95",
+      "value": "#ffecf1",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary99",
+      "value": "#fffbfa",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.tertiary100",
+      "value": "#ffffff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary0",
+      "value": "#000000",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary10",
+      "value": "#1d192b",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary20",
+      "value": "#332d41",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary30",
+      "value": "#4a4458",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary40",
+      "value": "#625b71",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary50",
+      "value": "#7a7289",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary60",
+      "value": "#958da5",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary70",
+      "value": "#b0a7c0",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary80",
+      "value": "#ccc2dc",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary90",
+      "value": "#e8def8",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary95",
+      "value": "#f6edff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary99",
+      "value": "#fffbfe",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.secondary100",
+      "value": "#ffffff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary0",
+      "value": "#000000",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary10",
+      "value": "#21005d",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary20",
+      "value": "#381e72",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary30",
+      "value": "#4f378b",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary40",
+      "value": "#6750a4",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary50",
+      "value": "#7f67be",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary60",
+      "value": "#9a82db",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary70",
+      "value": "#b69df8",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary80",
+      "value": "#d0bcff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary90",
+      "value": "#eaddff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary95",
+      "value": "#f6edff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary99",
+      "value": "#fffbfe",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.primary100",
+      "value": "#ffffff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant0",
+      "value": "#000000",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant10",
+      "value": "#1d1a22",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant20",
+      "value": "#322f37",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant30",
+      "value": "#49454f",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant40",
+      "value": "#605d66",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant50",
+      "value": "#79747e",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant60",
+      "value": "#938f99",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant70",
+      "value": "#aea9b4",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant80",
+      "value": "#cac4d0",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant90",
+      "value": "#e7e0ec",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant95",
+      "value": "#f5eefa",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant99",
+      "value": "#fffbfe",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral-variant100",
+      "value": "#ffffff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral0",
+      "value": "#000000",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral10",
+      "value": "#1c1b1f",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral20",
+      "value": "#313033",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral30",
+      "value": "#484649",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral40",
+      "value": "#605d62",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral50",
+      "value": "#787579",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral60",
+      "value": "#939094",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral70",
+      "value": "#aeaaae",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral80",
+      "value": "#c9c5ca",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral90",
+      "value": "#e6e1e5",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral95",
+      "value": "#f4eff4",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral99",
+      "value": "#fffbfe",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.neutral100",
+      "value": "#ffffff",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.black",
+      "value": "#000000",
+      "type": "COLOR",
+      "group": "palette"
+    },
+    {
+      "name": "md.ref.palette.white",
+      "value": "#ffffff",
+      "type": "COLOR",
+      "group": "palette"
+    }
+  ],
+  "scraped_at": "2026-03-23T06:15:21.725149+00:00",
+  "components": [
+    {
+      "name": "Button",
+      "category": "action",
+      "description": "Buttons help people initiate actions, from sending an email to deleting a document.",
+      "figma_search_name": "Button",
+      "variants": [
+        {
+          "name": "Filled Button",
+          "figma_name": "Button/Filled Button"
+        },
+        {
+          "name": "Outlined Button",
+          "figma_name": "Button/Outlined Button"
+        },
+        {
+          "name": "Text Button",
+          "figma_name": "Button/Text Button"
+        },
+        {
+          "name": "Elevated Button",
+          "figma_name": "Button/Elevated Button"
+        },
+        {
+          "name": "Tonal Button",
+          "figma_name": "Button/Filled Tonal Button"
+        }
+      ],
+      "detection": {
+        "name_keywords": [
+          "button",
+          "btn",
+          "cta",
+          "action",
+          "submit",
+          "confirm"
+        ],
+        "node_types": [
+          "FRAME",
+          "RECTANGLE"
+        ],
+        "height_range": [
+          32,
+          56
+        ],
+        "max_width": 240,
+        "requires_text_child": true,
+        "notes": "Frame with height 32–56px, typically wider than tall, with a single TEXT child"
+      }
+    },
+    {
+      "name": "List Item",
+      "category": "containment",
+      "description": "Lists display a continuous, vertical index of text or images.",
+      "figma_search_name": "List Item",
+      "variants": [
+        {
+          "name": "1-line",
+          "figma_name": "Lists/1-line item"
+        },
+        {
+          "name": "2-line",
+          "figma_name": "Lists/2-line item"
+        },
+        {
+          "name": "3-line",
+          "figma_name": "Lists/3-line item"
+        }
+      ],
+      "detection": {
+        "name_keywords": [
+          "song",
+          "track",
+          "item",
+          "row",
+          "list",
+          "entry",
+          "record"
+        ],
+        "node_types": [
+          "FRAME"
+        ],
+        "height_range": [
+          48,
+          88
+        ],
+        "min_width": 200,
+        "notes": "Full-width frame, height 48–88px, contains at least one TEXT child; often appears with sibling Divider nodes"
+      }
+    },
+    {
+      "name": "Navigation Bar",
+      "category": "navigation",
+      "description": "Navigation bars offer a persistent and convenient way to switch between primary destinations in an app.",
+      "figma_search_name": "Navigation Bar",
+      "variants": [
+        {
+          "name": "Navigation Bar",
+          "figma_name": "Navigation Bar/Navigation Bar"
+        }
+      ],
+      "detection": {
+        "name_keywords": [
+          "nav bar",
+          "navigation",
+          "tab bar",
+          "bottom nav",
+          "section 4",
+          "navbar"
+        ],
+        "node_types": [
+          "FRAME"
+        ],
+        "height_range": [
+          56,
+          96
+        ],
+        "min_width": 300,
+        "notes": "Full-width frame (≥300px wide), height 56–96px, contains 3–5 horizontally arranged destination items (icon + label)"
+      }
+    },
+    {
+      "name": "Divider",
+      "category": "containment",
+      "description": "Dividers are thin lines that group content in lists and layouts.",
+      "figma_search_name": "Divider",
+      "variants": [
+        {
+          "name": "Full-width Divider",
+          "figma_name": "Divider/Divider"
+        },
+        {
+          "name": "Inset Divider",
+          "figma_name": "Divider/Inset divider"
+        }
+      ],
+      "detection": {
+        "name_keywords": [
+          "rectangle",
+          "divider",
+          "separator",
+          "line",
+          "hr"
+        ],
+        "node_types": [
+          "RECTANGLE",
+          "FRAME",
+          "LINE"
+        ],
+        "max_height": 4,
+        "min_width": 100,
+        "notes": "Thin element (height ≤ 4px) with width > 100px; typically fill #D9D9D9 or outline-variant token"
+      }
+    },
+    {
+      "name": "Card",
+      "category": "containment",
+      "description": "Cards contain content and actions about a single subject.",
+      "figma_search_name": "Card",
+      "variants": [
+        {
+          "name": "Filled Card",
+          "figma_name": "Cards/Filled card"
+        },
+        {
+          "name": "Outlined Card",
+          "figma_name": "Cards/Outlined card"
+        },
+        {
+          "name": "Elevated Card",
+          "figma_name": "Cards/Elevated card"
+        }
+      ],
+      "detection": {
+        "name_keywords": [
+          "card",
+          "tile",
+          "panel",
+          "container"
+        ],
+        "node_types": [
+          "FRAME"
+        ],
+        "min_corner_radius": 8,
+        "notes": "Frame with cornerRadius ≥ 8, contains headline text and optional supporting text/image"
+      }
+    },
+    {
+      "name": "Top App Bar",
+      "category": "navigation",
+      "description": "Top app bars display navigation and actions relating to the current screen.",
+      "figma_search_name": "Top App Bar",
+      "variants": [
+        {
+          "name": "Center-aligned",
+          "figma_name": "Top app bar/Center-aligned"
+        },
+        {
+          "name": "Small",
+          "figma_name": "Top app bar/Small"
+        }
+      ],
+      "detection": {
+        "name_keywords": [
+          "top bar",
+          "app bar",
+          "header",
+          "toolbar",
+          "section 1",
+          "section 2",
+          "section 3"
+        ],
+        "node_types": [
+          "FRAME"
+        ],
+        "height_range": [
+          56,
+          112
+        ],
+        "min_width": 300,
+        "notes": "Full-width frame at top of screen, height 56–112px, typically contains title text and icon buttons"
+      }
+    }
+  ]
+}
