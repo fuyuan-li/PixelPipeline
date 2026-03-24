@@ -3,6 +3,7 @@
 This project is a Figma-to-GitLab review and migration pipeline for design system adoption.
 
 Designers can:
+
 - sketch a new interface in Figma, or
 - take an existing design that needs to be migrated to a different design system.
 
@@ -25,6 +26,7 @@ The latest workflow is:
 GCP is used as a fast cache layer for scraped design system data.
 
 Instead of scraping component and token definitions during every review, we:
+
 - scrape supported design systems ahead of time,
 - normalize the results into a shared schema,
 - store them in isolated GCP storage objects,
@@ -52,15 +54,21 @@ Figma Designer
 - `gcloud/functions/design-tokens-api/`: Cloud Function that serves cached design system data to the flow
 - `TODO.md`: current implementation notes, architecture details, and remaining setup work
 
+## Install the Figma Plugin
+
+For end-user installation steps, see [local/figma-ci-plugin/README.md]
+
 ## Current Status
 
 The local codebase already includes:
+
 - the Figma plugin export/apply flow,
 - the GitLab review flow,
 - the scraper for supported design systems,
 - the Cloud Function code for serving cached token data.
 
 The main remaining work is infrastructure setup and end-to-end verification:
+
 - create the GCP project resources,
 - create the storage bucket,
 - run the scraper for real,

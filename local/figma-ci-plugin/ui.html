@@ -248,8 +248,8 @@
   <input type="text" id="reviewBranch" placeholder="figma/review-…" />
   <div class="hint">Auto-filled after you submit a review. Or paste the source branch name.</div>
 
-  <button class="btn btn-primary" id="loadBtn" onclick="loadFixes()" style="margin-top:10px">
-    Load Fixes
+  <button class="btn btn-primary" id="loadBtn" onclick="loadFixes()" style="margin-top:10px" disabled>
+    Analyzing &amp; Preparing for Fixes
   </button>
 
   <div id="fixContent">
@@ -268,6 +268,9 @@
   const GITLAB_BASE_URL    = 'https://gitlab.com';
   const FLOW_ACCOUNT       = 'ai-figma-design-review-gitlab-ai-hackathon';
   const DESIGN_TOKENS_API  = 'https://design-tokens-api-sdzot2fiaq-uc.a.run.app';
+  const FIX_SPEC_PATH      = 'demo/figma-fix-spec.json';
+  const FIX_POLL_INTERVAL_MS = 15000;
+  const FIX_INPUT_DEBOUNCE_MS = 700;
 
   // ─── library state ────────────────────────────────────────────────────────
   let savedLibraryName = '';
@@ -380,6 +383,7 @@
         document.getElementById('token').value           = s.token;
         document.getElementById('rememberToken').checked = true;
       }
+      handleFixLookupInputsChanged({ immediate: true });
     }
 
     if (msg.type === 'available-libraries') {
@@ -569,6 +573,8 @@
 
       parent.postMessage({ pluginMessage: { type: 'save-review-ref', branch: reviewBranch, mrIid: mr.iid } }, '*');
       document.getElementById('reviewBranch').value = reviewBranch;
+      showPendingFixState();
+      handleFixLookupInputsChanged({ immediate: true });
 
       setStatus('submitStatus', '🤖 Triggering review flow…');
       await fetch(`${api}/projects/${project.id}/merge_requests/${mr.iid}/notes`, {
@@ -595,6 +601,127 @@
   // displayItems:  flattened, one entry per patch, for rendering + selection
   let loadedFixSets = [];
   let displayItems  = [];
+  let fixPollTimer = null;
+  let fixInputDebounceTimer = null;
+  let fixAvailabilityToken = 0;
+
+  function setLoadButtonReady(isReady) {
+    const btn = document.getElementById('loadBtn');
+    btn.disabled = !isReady;
+    btn.textContent = isReady ? 'Load Fixes' : 'Analyzing & Preparing for Fixes';
+  }
+
+  function clearFixAvailabilityTimers() {
+    if (fixPollTimer) {
+      clearTimeout(fixPollTimer);
+      fixPollTimer = null;
+    }
+    if (fixInputDebounceTimer) {
+      clearTimeout(fixInputDebounceTimer);
+      fixInputDebounceTimer = null;
+    }
+  }
+
+  function getFixLookupValues() {
+    return {
+      branch:  document.getElementById('reviewBranch').value.trim(),
+      token:   document.getElementById('token').value.trim(),
+      project: document.getElementById('projectPath').value.trim(),
+    };
+  }
+
+  function resetLoadedFixes() {
+    loadedFixSets = [];
+    displayItems = [];
+  }
+
+  function showPendingFixState() {
+    resetLoadedFixes();
+    document.getElementById('fixContent').innerHTML = `
+      <div class="empty-state">
+        Review is still running.<br>
+        Fixes will appear here once analysis finishes.
+      </div>`;
+  }
+
+  function scheduleFixAvailabilityCheck(delayMs) {
+    if (fixPollTimer) clearTimeout(fixPollTimer);
+    fixPollTimer = setTimeout(checkFixAvailability, delayMs);
+  }
+
+  async function checkFixAvailability() {
+    const requestToken = ++fixAvailabilityToken;
+    const values = getFixLookupValues();
+
+    if (!values.branch || !values.token || !values.project) {
+      setLoadButtonReady(false);
+      setStatus('applyStatus', '', '');
+      return;
+    }
+
+    try {
+      const api = `${GITLAB_BASE_URL}/api/v4`;
+      const h   = { 'PRIVATE-TOKEN': values.token };
+
+      const projRes = await fetch(`${api}/projects/${encodeURIComponent(values.project)}`, { headers: h });
+      if (requestToken !== fixAvailabilityToken) return;
+      if (!projRes.ok) {
+        setLoadButtonReady(false);
+        setStatus('applyStatus', `❌ Could not check fix status (${projRes.status}).`, 'error');
+        return;
+      }
+      const proj = await projRes.json();
+
+      const filePath = encodeURIComponent(FIX_SPEC_PATH);
+      const specRes = await fetch(
+        `${api}/projects/${proj.id}/repository/files/${filePath}?ref=${encodeURIComponent(values.branch)}`,
+        { headers: h }
+      );
+      if (requestToken !== fixAvailabilityToken) return;
+
+      if (specRes.status === 404) {
+        setLoadButtonReady(false);
+        setStatus('applyStatus', 'Analyzing design and preparing fixes…', '');
+        scheduleFixAvailabilityCheck(FIX_POLL_INTERVAL_MS);
+        return;
+      }
+      if (!specRes.ok) {
+        setLoadButtonReady(false);
+        setStatus('applyStatus', `❌ Could not check fix status (${specRes.status}).`, 'error');
+        return;
+      }
+
+      setLoadButtonReady(true);
+      setStatus('applyStatus', 'Fix plan is ready. Click Load Fixes.', 'success');
+    } catch (err) {
+      if (requestToken !== fixAvailabilityToken) return;
+      setLoadButtonReady(false);
+      setStatus('applyStatus', '❌ ' + err.message, 'error');
+    }
+  }
+
+  function handleFixLookupInputsChanged(options) {
+    const opts = options || {};
+    clearFixAvailabilityTimers();
+    setLoadButtonReady(false);
+    fixAvailabilityToken += 1;
+
+    const values = getFixLookupValues();
+    if (!values.branch || !values.token || !values.project) {
+      setStatus('applyStatus', '', '');
+      return;
+    }
+
+    showPendingFixState();
+    setStatus('applyStatus', 'Analyzing design and preparing fixes…', '');
+
+    if (opts.immediate) {
+      checkFixAvailability();
+      return;
+    }
+
+    fixInputDebounceTimer = setTimeout(checkFixAvailability, FIX_INPUT_DEBOUNCE_MS);
+  }
 
   // Flatten grouped fix sets into individual display items for the UI.
   // Each item carries both fix-set fields (node_id, target_component_name…)
@@ -626,9 +753,10 @@
   }
 
   async function loadFixes() {
-    const branch  = document.getElementById('reviewBranch').value.trim();
-    const token   = document.getElementById('token').value.trim();
-    const project = document.getElementById('projectPath').value.trim();
+    const values = getFixLookupValues();
+    const branch = values.branch;
+    const token = values.token;
+    const project = values.project;
 
     if (!branch)  { setStatus('applyStatus', '❌ Branch name is required.', 'error'); return; }
     if (!token)   { setStatus('applyStatus', '❌ Token is required (fill in Submit tab).', 'error'); return; }
@@ -645,19 +773,17 @@
       if (!projRes.ok) throw new Error(`Project not found (${projRes.status})`);
       const proj = await projRes.json();
 
-      const filePath = encodeURIComponent('demo/figma-fix-spec.json');
+      const filePath = encodeURIComponent(FIX_SPEC_PATH);
       const specRes  = await fetch(
         `${api}/projects/${proj.id}/repository/files/${filePath}?ref=${encodeURIComponent(branch)}`,
         { headers: h }
       );
 
       if (specRes.status === 404) {
-        document.getElementById('fixContent').innerHTML = `
-          <div class="empty-state">
-            No fix spec found on this branch yet.<br>
-            The Fix Agent posts one after review completes —<br>watch for the 🔧 comment on your MR.
-          </div>`;
-        setStatus('applyStatus', '');
+        showPendingFixState();
+        setLoadButtonReady(false);
+        setStatus('applyStatus', 'Analyzing design and preparing fixes…', '');
+        scheduleFixAvailabilityCheck(FIX_POLL_INTERVAL_MS);
         return;
       }
       if (!specRes.ok) throw new Error(`Could not fetch fix spec (${specRes.status})`);
@@ -669,12 +795,15 @@
 
       renderFixList(displayItems);
       setStatus('applyStatus', '');
+      setLoadButtonReady(true);
 
     } catch (err) {
       setStatus('applyStatus', '❌ ' + err.message, 'error');
     }
 
-    document.getElementById('loadBtn').disabled = false;
+    if (document.getElementById('loadBtn').textContent === 'Load Fixes') {
+      document.getElementById('loadBtn').disabled = false;
+    }
   }
 
   function renderFixList(items) {
@@ -824,6 +953,11 @@
       ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])
     );
   }
+
+  document.getElementById('loadBtn').disabled = true;
+  document.getElementById('projectPath').addEventListener('input', () => handleFixLookupInputsChanged());
+  document.getElementById('token').addEventListener('input', () => handleFixLookupInputsChanged());
+  document.getElementById('reviewBranch').addEventListener('input', () => handleFixLookupInputsChanged());
 </script>
 </body>
 </html>
