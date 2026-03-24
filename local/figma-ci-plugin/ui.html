@@ -602,7 +602,39 @@
 
   // ─── APPLY: load + apply fixes ───────────────────────────────────────────
 
-  let loadedFixes = [];
+  // loadedFixSets: grouped format from figma-fix-spec.json
+  // displayItems:  flattened, one entry per patch, for rendering + selection
+  let loadedFixSets = [];
+  let displayItems  = [];
+
+  // Flatten grouped fix sets into individual display items for the UI.
+  // Each item carries both fix-set fields (node_id, target_component_name…)
+  // and patch fields (property, old_value, new_value, severity…) merged flat.
+  function flattenFixSets(fixSets) {
+    const items = [];
+    fixSets.forEach(function(fixSet) {
+      (fixSet.patches || []).forEach(function(patch) {
+        items.push({
+          // fix-set level
+          node_id:               fixSet.node_id,
+          node_name:             fixSet.node_name,
+          target_component_id:   fixSet.target_component_id,
+          target_component_name: fixSet.target_component_name,
+          confidence:            fixSet.confidence,
+          // patch level
+          target_node_id:        patch.target_node_id,
+          target_node_name:      patch.target_node_name,
+          target_role:           patch.target_role,
+          property:              patch.property,
+          old_value:             patch.old_value,
+          new_value:             patch.new_value,
+          severity:              patch.severity,
+          reason:                patch.reason,
+        });
+      });
+    });
+    return items;
+  }
 
   async function loadFixes() {
     const branch  = document.getElementById('reviewBranch').value.trim();
@@ -643,9 +675,10 @@
 
       const raw  = await specRes.json();
       const spec = JSON.parse(atob(raw.content));
-      loadedFixes = spec.fixes || [];
+      loadedFixSets = spec.fixes || [];
+      displayItems  = flattenFixSets(loadedFixSets);
 
-      renderFixList(loadedFixes);
+      renderFixList(displayItems);
       setStatus('applyStatus', '');
 
     } catch (err) {
@@ -655,61 +688,88 @@
     document.getElementById('loadBtn').disabled = false;
   }
 
-  function renderFixList(fixes) {
-    if (!fixes.length) {
+  function renderFixList(items) {
+    if (!items.length) {
       document.getElementById('fixContent').innerHTML = `
         <div class="empty-state">No fixes suggested — your design looks good!</div>`;
       return;
     }
 
-    const items = fixes.map((fix, i) => {
-      const detail = formatFixDetail(fix);
-      const title  = fix.root_node_name && fix.root_node_name !== fix.node_name
-        ? `${fix.root_node_name} → ${fix.node_name}`
-        : (fix.node_name || fix.node_id);
-      const meta = [formatPropertyLabel(fix.property), fix.target_component_name, fix.target_role]
+    const rows = items.map((item, i) => {
+      const detail = formatFixDetail(item);
+      // Show sub-node name if the patch targets a child (text/icon), otherwise just root name
+      const title = (item.target_role !== 'root' && item.target_node_name && item.target_node_name !== item.node_name)
+        ? `${item.node_name} / ${item.target_node_name}`
+        : (item.node_name || item.node_id);
+      const meta = [formatPropertyLabel(item.property), item.target_component_name, item.target_role !== 'root' ? item.target_role : null]
         .filter(Boolean)
         .join(' · ');
 
       return `
-        <div class="fix-item severity-${fix.severity || 'warning'}">
+        <div class="fix-item severity-${item.severity || 'warning'}">
           <input type="checkbox" id="fix-${i}" checked data-index="${i}">
           <div class="fix-item-body">
             <div class="fix-item-name">${escHtml(title)}</div>
             <div class="fix-reason">${escHtml(meta)}</div>
             <div class="fix-item-detail">${detail}</div>
-            <div class="fix-reason">${escHtml(fix.reason || '')}</div>
+            <div class="fix-reason">${escHtml(item.reason || '')}</div>
           </div>
         </div>`;
     }).join('');
 
-    const warnings = fixes.filter(f => f.severity === 'warning').length;
-    const errors   = fixes.filter(f => f.severity === 'error').length;
+    const warnings = items.filter(f => f.severity === 'warning').length;
+    const errors   = items.filter(f => f.severity === 'error').length;
 
     document.getElementById('fixContent').innerHTML = `
       <div class="fix-summary">
-        <strong>${fixes.length} fix${fixes.length !== 1 ? 'es' : ''} suggested</strong>
+        <strong>${items.length} fix${items.length !== 1 ? 'es' : ''} suggested</strong>
         ${warnings ? ` · ${warnings} ⚠️` : ''}
         ${errors   ? ` · ${errors} ❌`   : ''}
       </div>
-      <div class="fix-list">${items}</div>
+      <div class="fix-list">${rows}</div>
       <button class="btn btn-success" id="applyBtn" onclick="applySelected()">Apply Selected Fixes</button>`;
   }
 
   function applySelected() {
-    const selected = loadedFixes.filter((_, i) => {
+    const selectedItems = displayItems.filter((_, i) => {
       const cb = document.getElementById(`fix-${i}`);
       return cb && cb.checked;
     });
 
-    if (!selected.length) {
+    if (!selectedItems.length) {
       setStatus('applyStatus', '⚠️ No fixes selected.', '');
       return;
     }
 
+    // Re-group selected flat items back into grouped fix sets for code.js.
+    const grouped = {};
+    selectedItems.forEach(function(item) {
+      if (!grouped[item.node_id]) {
+        grouped[item.node_id] = {
+          node_id:               item.node_id,
+          node_name:             item.node_name,
+          target_component_id:   item.target_component_id,
+          target_component_name: item.target_component_name,
+          confidence:            item.confidence,
+          patches:               [],
+        };
+      }
+      grouped[item.node_id].patches.push({
+        target_node_id:   item.target_node_id,
+        target_node_name: item.target_node_name,
+        target_role:      item.target_role,
+        property:         item.property,
+        old_value:        item.old_value,
+        new_value:        item.new_value,
+        severity:         item.severity,
+        reason:           item.reason,
+      });
+    });
+
+    const fixSets = Object.values(grouped);
     document.getElementById('applyBtn').disabled = true;
-    setStatus('applyStatus', `Applying ${selected.length} fix${selected.length !== 1 ? 'es' : ''}…`);
-    parent.postMessage({ pluginMessage: { type: 'apply-fixes', fixes: selected } }, '*');
+    setStatus('applyStatus', `Applying ${selectedItems.length} fix${selectedItems.length !== 1 ? 'es' : ''}…`);
+    parent.postMessage({ pluginMessage: { type: 'apply-fixes', fixes: fixSets } }, '*');
   }
 
   function isColorProperty(property) {
@@ -745,10 +805,10 @@
   }
 
   function formatFixDetail(fix) {
-    const current = formatScalar(fix.current_value ?? fix.current_hex);
-    const target  = formatScalar(fix.target_value);
+    const current = formatScalar(fix.old_value);
+    const target  = formatScalar(fix.new_value);
     if (isColorProperty(fix.property)) {
-      const swatchColor = typeof fix.target_value === 'string' ? fix.target_value : '#ccc';
+      const swatchColor = typeof fix.new_value === 'string' ? fix.new_value : '#ccc';
       return `
         <span class="color-swatch" style="background:${escHtml(swatchColor)}"></span>
         <span class="fix-hex">${current}</span>
