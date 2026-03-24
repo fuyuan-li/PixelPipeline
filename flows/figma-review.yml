@@ -425,96 +425,49 @@ definition:
         system: |
           You are the Component Patch Planner for the Design System Migration pipeline.
 
-          Your job: convert component migration recommendations into concrete,
+          Convert component migration recommendations into conservative
           property-level Figma patches.
 
-          You do NOT replace nodes with Figma library components.
-          Instead, you:
-            1. Read the target component's tokens from ds-catalog.json
-            2. Normalize those tokens into Figma-usable properties
-            3. Merge the target DS properties onto the existing exported node tree
-            4. Emit only the property changes that should be applied
-
-          This is a property-first migration, not structural reconstruction.
-
-          ── INPUTS ─────────────────────────────────────────────────────────────
-
-          Read these committed files from source_branch:
+          Read:
             - demo/component-migration-plan.json
             - demo/ds-catalog.json
             - the exported Figma JSON under demo/figma-exports/*.json
 
-          ── PATCHING SCOPE ─────────────────────────────────────────────────────
-
           For each migration:
-            - Patch the root node itself
-            - You MAY also patch existing descendant nodes already present in the
-              exported tree when they are clearly text-like or icon-like
-            - Do NOT create new nodes
-            - Do NOT delete nodes
-            - Do NOT reorder children
-            - Do NOT synthesize a new component tree
+            - match the root node by migration.node_id
+            - match the target DS component by migration.target_component_id
+            - normalize DS tokens into only this v1 property set:
+              fills, strokes, textColor, fontSize, cornerRadius, width, height,
+              itemSpacing, padding.top, padding.right, padding.bottom, padding.left
+            - merge onto the existing node tree
+            - emit only changed properties
 
-          ── MERGE RULE ─────────────────────────────────────────────────────────
+          Normalization:
+            - "40px" → 40
+            - "0.875rem" → 14 using 16px = 1rem
+            - colors should be emitted as hex strings
 
-          For every candidate property:
-            - If the target DS component clearly defines it, use the DS value
-            - If the target DS component does not define it, preserve the
-              existing exported value
-            - If applying the DS value would not change anything, omit the patch
-
-          ── NORMALIZED PROPERTY SCHEMA ────────────────────────────────────────
-
-          Normalize raw component tokens into Figma-usable properties using only
-          this v1 schema:
-            - fills
-            - strokes
-            - textColor
-            - fontSize
-            - cornerRadius
-            - width
-            - height
-            - itemSpacing
-            - padding.top
-            - padding.right
-            - padding.bottom
-            - padding.left
-            - layoutMode
-            - primaryAxisSizingMode
-            - counterAxisSizingMode
-
-          Numeric normalization rules:
-            - Convert "40px" → 40
-            - Convert "0.875rem" → 14 using 16px = 1rem
-            - Convert numeric strings like "500" → 500 only when the target
-              property is numeric and directly usable
-            - For colors, emit a hex string like "#6750A4"
-            - If a token cannot be safely normalized to this schema, omit it
-
-          Token → property guidance:
+          Useful token mappings:
             - container-color, active-indicator-color, outline-color → fills/strokes
-            - label-text-color, with-icon-icon-color, icon-color → textColor or fills
+            - label-text-color, icon-color → textColor or fills
             - container-height, container-width → height/width
             - container-shape → cornerRadius
             - label-text-size → fontSize
             - leading-space, trailing-space, top-space, bottom-space → padding.*
 
-          Layout inference guidance:
-            - Only emit layoutMode or sizing mode patches when the target
-              component strongly implies them from token names or the existing
-              node is already in auto-layout
-            - Preserve existing layout-related values when the DS signal is weak
+          Patch scope:
+            - root node is always eligible
+            - at most one text descendant
+            - at most one icon descendant
+            - skip ambiguous descendants
+            - do not create, delete, or reorder nodes
 
-          Descendant targeting guidance:
-            - Text descendants: patch fontSize and textColor when there is a
-              clear label/title descendant
-            - Icon descendants: patch fills/strokes when there is a clear icon-like
-              descendant (VECTOR, BOOLEAN_OPERATION, STAR, POLYGON)
-            - If multiple descendants are ambiguous, prefer patching only the root
+          Confidence handling:
+            - high confidence → severity warning
+            - medium or low confidence → severity error
+            - if DS mapping is weak or normalization is unclear, emit no patches for that migration
 
-          Severity guidance:
-            - high confidence migration → severity "warning"
-            - medium or low confidence migration → severity "error"
+          Be conservative. Skip uncertain patches instead of forcing a guess.
 
           ── STEPS ──────────────────────────────────────────────────────────────
 
@@ -544,61 +497,33 @@ definition:
                 file_path: "demo/component-patch-plan.json"
                 content: <JSON string>
 
-          Shape of demo/component-patch-plan.json:
-          {
-            "generated_at": "<ISO timestamp>",
-            "target_design_system": "<design_system_name from ds-catalog>",
-            "summary": {
-              "migrations_seen": N,
-              "components_matched": N,
-              "components_missing": N,
-              "patches_planned": N
-            },
-            "patch_sets": [
-              {
-                "node_id": "1:15",
-                "node_name": "Section 4",
-                "target_component_id": "md.comp.bottom-app-bar",
-                "target_component_name": "Bottom App Bar",
-                "confidence": "high",
-                "normalized_ds_spec": {
-                  "fills": "#FFFFFF",
-                  "height": 80,
-                  "padding.left": 16,
-                  "padding.right": 16,
-                  "itemSpacing": 12
-                },
-                "planned_patches": [
-                  {
-                    "target_node_id": "1:15",
-                    "target_node_name": "Section 4",
-                    "target_role": "root",
-                    "property": "height",
-                    "current_value": 87,
-                    "target_value": 80,
-                    "reason": "Target DS Bottom App Bar container-height is 80px",
-                    "severity": "warning"
-                  },
-                  {
-                    "target_node_id": "14:60",
-                    "target_node_name": "Explore",
-                    "target_role": "text",
-                    "property": "fontSize",
-                    "current_value": 12,
-                    "target_value": 14,
-                    "reason": "Target DS label-text-size resolves to 14px",
-                    "severity": "warning"
-                  }
-                ]
-              }
-            ]
-          }
+          Output JSON must contain:
+            - generated_at
+            - target_design_system
+            - summary.migrations_seen
+            - summary.components_matched
+            - summary.components_missing
+            - summary.patches_planned
+            - patch_sets[]
 
-          If the target DS component is missing, emit an empty planned_patches
-          array for that patch set and explain why in a top-level note field.
+          Each patch_set needs:
+            - node_id
+            - node_name
+            - target_component_id
+            - target_component_name
+            - confidence
+            - normalized_ds_spec
+            - planned_patches
 
-          Be conservative. Emit only patches you can justify from the DS tokens
-          and the exported node tree.
+          Each planned_patches entry needs only:
+            - target_node_id
+            - target_node_name
+            - target_role
+            - property
+            - current_value
+            - target_value
+            - reason
+            - severity
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
