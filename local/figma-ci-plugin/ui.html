@@ -268,8 +268,9 @@
 
 <script>
   // ─── constants ────────────────────────────────────────────────────────────
-  const GITLAB_BASE_URL = 'https://gitlab.com';
-  const FLOW_ACCOUNT    = 'ai-figma-design-review-gitlab-ai-hackathon';
+  const GITLAB_BASE_URL    = 'https://gitlab.com';
+  const FLOW_ACCOUNT       = 'ai-figma-design-review-gitlab-ai-hackathon';
+  const DESIGN_TOKENS_API  = 'https://design-tokens-api-sdzot2fiaq-uc.a.run.app';
 
   // ─── library state ────────────────────────────────────────────────────────
   let savedLibraryName = '';
@@ -446,51 +447,6 @@
     }, '*');
   }
 
-  // ─── Poll CI pipeline, then post @mention ────────────────────────────────
-  // The fetch-design-tokens CI job must commit ds-catalog.json before the AI
-  // flow starts. We watch the pipeline and post the @mention only when it
-  // succeeds (or fails/times out — so the flow always starts eventually).
-  async function waitForPipelineAndMention(api, h, projectId, mrIid) {
-    const INTERVAL  = 6000;   // 6 s between polls
-    const MAX_POLLS = 20;     // ~2 min max wait
-
-    // ── wait for a pipeline to appear on the MR ──────────────────────────
-    let pipelineId = null;
-    for (let i = 0; i < MAX_POLLS; i++) {
-      setStatus('submitStatus', `⏳ Waiting for CI pipeline… (${i * 6}s)`, 'info');
-      await new Promise(r => setTimeout(r, INTERVAL));
-      try {
-        const res      = await fetch(`${api}/projects/${projectId}/merge_requests/${mrIid}/pipelines`, { headers: h });
-        const list     = res.ok ? await res.json() : [];
-        if (list.length > 0) { pipelineId = list[0].id; break; }
-      } catch (_) {}
-    }
-
-    if (!pipelineId) {
-      // No pipeline found — post @mention anyway so review isn't blocked.
-      setStatus('submitStatus', '⚠️ No CI pipeline detected — triggering review now.', 'info');
-    } else {
-      // ── poll pipeline status until terminal ──────────────────────────
-      for (let i = 0; i < MAX_POLLS; i++) {
-        try {
-          const res      = await fetch(`${api}/projects/${projectId}/pipelines/${pipelineId}`, { headers: h });
-          const pipeline = res.ok ? await res.json() : {};
-          const status   = pipeline.status || '';
-          if (['success', 'failed', 'canceled', 'skipped'].includes(status)) break;
-        } catch (_) {}
-        setStatus('submitStatus', `⏳ CI pipeline running… (${i * 6}s)`, 'info');
-        await new Promise(r => setTimeout(r, INTERVAL));
-      }
-    }
-
-    // ── post @mention to trigger AI flow ─────────────────────────────────
-    setStatus('submitStatus', '🤖 Triggering review flow…', 'info');
-    await fetch(`${api}/projects/${projectId}/merge_requests/${mrIid}/notes`, {
-      method: 'POST', headers: h,
-      body: JSON.stringify({ body: `@${FLOW_ACCOUNT} please review this design update.` }),
-    });
-  }
-
   async function runGitLabFlow(figmaPayload) {
     const v   = getSubmitValues();
     const api = `${GITLAB_BASE_URL}/api/v4`;
@@ -504,6 +460,44 @@
 
       const ts           = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
       const reviewBranch = `figma/review-${ts}`;
+
+      // ── Fetch design system catalog from Cloud Function (GCS) ────────────
+      const slug   = figmaPayload.designSystem?.slug  || null;
+      const dsName = figmaPayload.designSystem?.name  || null;
+      let dsCatalog;
+
+      if (slug) {
+        setStatus('submitStatus', `🎨 Fetching ${dsName} design tokens…`);
+        try {
+          const tokenRes = await fetch(`${DESIGN_TOKENS_API}?system=${slug}&resource=components`);
+          if (tokenRes.ok) {
+            const tokenData = await tokenRes.json();
+            dsCatalog = {
+              design_system_name: tokenData.system,
+              slug:               tokenData.slug,
+              components:         tokenData.components || [],
+            };
+            setStatus('submitStatus', `✅ Loaded ${dsCatalog.components.length} ${dsName} components`);
+          } else {
+            throw new Error(`HTTP ${tokenRes.status}`);
+          }
+        } catch (e) {
+          setStatus('submitStatus', `⚠️ Could not fetch design tokens (${e.message}) — review will use built-in rules`);
+          dsCatalog = {
+            design_system_name: dsName,
+            slug,
+            components: [],
+            warning: `Design Tokens API unavailable (${e.message}). The classifier will use built-in rules.`,
+          };
+        }
+      } else {
+        dsCatalog = {
+          design_system_name: null,
+          slug:               null,
+          components:         [],
+          warning:            'No design system selected. The classifier will use built-in rules.',
+        };
+      }
 
       setStatus('submitStatus', '🌿 Creating branch…');
       const branchRes = await fetch(`${api}/projects/${project.id}/repository/branches`, {
@@ -526,18 +520,30 @@
         `Variables exported: ${varCount}`,
       ].join('\n');
 
-      setStatus('submitStatus', '📄 Committing Figma export…');
+      setStatus('submitStatus', '📄 Committing Figma export + design tokens…');
       const fileRes = await fetch(
-        `${api}/projects/${project.id}/repository/files/${encodeURIComponent(fileName)}`,
+        `${api}/projects/${project.id}/repository/commits`,
         {
           method: 'POST', headers: h,
           body: JSON.stringify({
-            branch: reviewBranch, content: JSON.stringify(figmaPayload, null, 2),
-            commit_message: commitMsg, encoding: 'text',
+            branch:         reviewBranch,
+            commit_message: commitMsg,
+            actions: [
+              {
+                action:    'create',
+                file_path: fileName,
+                content:   JSON.stringify(figmaPayload, null, 2),
+              },
+              {
+                action:    'create',
+                file_path: 'demo/ds-catalog.json',
+                content:   JSON.stringify(dsCatalog, null, 2),
+              },
+            ],
           }),
         }
       );
-      if (!fileRes.ok) throw new Error(`File commit failed (${fileRes.status})`);
+      if (!fileRes.ok) throw new Error(`Commit failed (${fileRes.status})`);
 
       const pageName    = figmaPayload.document?.pageName || 'Design';
       const description = [
@@ -570,14 +576,11 @@
       parent.postMessage({ pluginMessage: { type: 'save-review-ref', branch: reviewBranch, mrIid: mr.iid } }, '*');
       document.getElementById('reviewBranch').value = reviewBranch;
 
-      setStatusHTML('submitStatus',
-        `✅ MR <a href="${mr.web_url}" target="_blank">!${mr.iid} ↗</a> created.`,
-        'success'
-      );
-
-      // Wait for the fetch-design-tokens CI job to commit ds-catalog.json,
-      // then post the @mention so the AI flow always starts with data ready.
-      await waitForPipelineAndMention(api, h, project.id, mr.iid);
+      setStatus('submitStatus', '🤖 Triggering review flow…');
+      await fetch(`${api}/projects/${project.id}/merge_requests/${mr.iid}/notes`, {
+        method: 'POST', headers: h,
+        body: JSON.stringify({ body: `@${FLOW_ACCOUNT} please review this design update.` }),
+      });
 
       setStatusHTML('submitStatus',
         `✅ MR <a href="${mr.web_url}" target="_blank">!${mr.iid} ↗</a> — review triggered!

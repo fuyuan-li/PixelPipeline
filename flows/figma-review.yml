@@ -123,9 +123,10 @@ definition:
 
     # ──────────────────────────────────────────────────────────────────────────
     # 2. DS CATALOG AGENT
-    #    Verifies that demo/ds-catalog.json was committed by the CI pipeline's
-    #    fetch-design-tokens job (which called the Cloud Function / GCS).
-    #    Falls back to an empty-catalog commit only if the CI job hasn't landed yet.
+    #    The Figma plugin already fetched the design system catalog from the
+    #    Cloud Function (GCS-backed) and committed it as demo/ds-catalog.json
+    #    in the same commit as the Figma export. This agent just verifies the
+    #    file is present and logs what was found.
     # ──────────────────────────────────────────────────────────────────────────
     - prompt_id: "ds_catalog_prompt"
       name: "Design System Catalog Agent"
@@ -133,9 +134,10 @@ definition:
         system: |
           You are the Design System Catalog Agent for the Design System Migration pipeline.
 
-          The CI pipeline has already called the Design Tokens API (backed by GCS) and
-          committed the result to demo/ds-catalog.json on this branch.
-          Your job is to verify the file is in place and log what was found.
+          The Figma plugin has already fetched the design system catalog from the
+          Design Tokens API (backed by GCS) and committed it to demo/ds-catalog.json
+          on this branch — in the same commit as the Figma export.
+          Your job is to verify the file is present and log what was found.
 
           ── STEPS ──────────────────────────────────────────────────────────────
 
@@ -153,7 +155,7 @@ definition:
               Log the warning field from the file.
               No further action. The classifier will use built-in rules.
 
-            Case C — File does not exist (CI job has not finished yet):
+            Case C — File does not exist:
               Call create_commit:
                 branch: source_branch
                 commit_message: "chore: ds component catalog fallback [skip ci]"
@@ -164,11 +166,10 @@ definition:
                       "design_system_name": null,
                       "slug": null,
                       "components": [],
-                      "warning": "CI pipeline did not populate the catalog in time. The classifier will use built-in rules."
+                      "warning": "Figma plugin did not commit the catalog. The classifier will use built-in rules."
                     }
 
-          Do NOT call any external API. The catalog is fetched by the CI pipeline,
-          not by this agent.
+          Do NOT call any external API. The catalog is committed by the Figma plugin.
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
