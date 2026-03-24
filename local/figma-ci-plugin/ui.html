@@ -506,8 +506,8 @@
       });
       if (!branchRes.ok) throw new Error(`Branch creation failed (${branchRes.status})`);
 
-      const fileName  = `demo/figma-exports/${ts}.json`;
-      const dsName    = figmaPayload.designSystem
+      const fileName      = `demo/figma-exports/${ts}.json`;
+      const dsDisplayName = figmaPayload.designSystem
         ? `${figmaPayload.designSystem.libraryName || figmaPayload.designSystem.name} / ${figmaPayload.designSystem.collectionName || ''}`
         : '—';
       const varCount  = figmaPayload.designSystem?.variables?.length || 0;
@@ -516,7 +516,7 @@
         'chore: add Figma design snapshot for review',
         '',
         `Page: ${figmaPayload.document?.pageName || '—'}`,
-        `Design System: ${dsName}`,
+        `Design System: ${dsDisplayName}`,
         `Variables exported: ${varCount}`,
       ].join('\n');
 
@@ -555,7 +555,7 @@
         `|---|---|`,
         `| **Page** | ${pageName} |`,
         `| **Exported at** | ${figmaPayload.exportedAt} |`,
-        `| **Design System** | ${dsName} (${varCount} variables) |`,
+        `| **Design System** | ${dsDisplayName} (${varCount} variables) |`,
         `| **Snapshot** | \`${fileName}\` |`,
         '',
         `---`,
