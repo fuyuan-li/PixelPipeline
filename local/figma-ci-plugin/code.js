@@ -237,116 +237,139 @@ figma.ui.onmessage = async (msg) => {
   }
 
   // Apply a list of fixes produced by the Fix Agent.
+  // Expected format: msg.fixes is an array of fix sets grouped by node:
+  //   { node_id, node_name, target_component_id, target_component_name, confidence,
+  //     patches: [{ target_node_id, target_node_name, target_role, property,
+  //                 old_value, new_value, severity, reason }] }
   if (msg.type === 'apply-fixes') {
     const results = [];
 
-    for (const fix of msg.fixes) {
-      const node = figma.getNodeById(fix.target_node_id || fix.node_id);
+    for (const fixSet of msg.fixes) {
+      for (const patch of fixSet.patches) {
+        const node = figma.getNodeById(patch.target_node_id);
 
-      if (!node) {
-        results.push(Object.assign({}, fix, { status: 'not_found' }));
-        continue;
-      }
+        // Build a result entry with full context for the UI.
+        const entry = {
+          node_id:               fixSet.node_id,
+          node_name:             fixSet.node_name,
+          target_component_id:   fixSet.target_component_id,
+          target_component_name: fixSet.target_component_name,
+          confidence:            fixSet.confidence,
+          target_node_id:        patch.target_node_id,
+          target_node_name:      patch.target_node_name,
+          target_role:           patch.target_role,
+          property:              patch.property,
+          old_value:             patch.old_value,
+          new_value:             patch.new_value,
+          severity:              patch.severity,
+          reason:                patch.reason,
+        };
 
-      try {
-        if (fix.property === 'fills' || fix.property === 'strokes') {
-          const outcome = setPaintColor(node, fix.property, fix.target_value, fix.fill_index);
-          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
-
-        } else if (fix.property === 'textColor') {
-          if (node.type !== 'TEXT') {
-            results.push(Object.assign({}, fix, { status: 'unsupported_property' }));
-            continue;
-          }
-          const outcome = setPaintColor(node, 'fills', fix.target_value, 0);
-          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
-
-        } else if (fix.property === 'fontSize' && 'fontSize' in node) {
-          const fontSize = normalizeNumber(fix.target_value);
-          if (fontSize == null) {
-            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
-            continue;
-          }
-          await loadTextNodeFontAsync(node);
-          node.fontSize = fontSize;
-          results.push(Object.assign({}, fix, { status: 'applied' }));
-
-        } else if (fix.property === 'cornerRadius' && 'cornerRadius' in node) {
-          const cornerRadius = normalizeNumber(fix.target_value);
-          if (cornerRadius == null) {
-            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
-            continue;
-          }
-          node.cornerRadius = cornerRadius;
-          results.push(Object.assign({}, fix, { status: 'applied' }));
-
-        } else if (fix.property === 'width') {
-          const outcome = resizeNode(node, fix.target_value, null);
-          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
-
-        } else if (fix.property === 'height') {
-          const outcome = resizeNode(node, null, fix.target_value);
-          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
-
-        } else if (fix.property === 'resize') {
-          const value = fix.target_value || {};
-          const outcome = resizeNode(node, value.width, value.height);
-          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
-
-        } else if (fix.property === 'itemSpacing' && 'itemSpacing' in node) {
-          const spacing = normalizeNumber(fix.target_value);
-          if (spacing == null) {
-            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
-            continue;
-          }
-          node.itemSpacing = spacing;
-          results.push(Object.assign({}, fix, { status: 'applied' }));
-
-        } else if (typeof fix.property === 'string' && fix.property.startsWith('padding.') && 'paddingTop' in node) {
-          const side = fix.property.split('.')[1];
-          const map  = { top: 'paddingTop', right: 'paddingRight', bottom: 'paddingBottom', left: 'paddingLeft' };
-          if (map[side]) {
-            const paddingValue = normalizeNumber(fix.target_value);
-            if (paddingValue == null) {
-              results.push(Object.assign({}, fix, { status: 'invalid_value' }));
-              continue;
-            }
-            node[map[side]] = paddingValue;
-            results.push(Object.assign({}, fix, { status: 'applied' }));
-          } else {
-            results.push(Object.assign({}, fix, { status: 'unsupported_property' }));
-          }
-
-        } else if (fix.property === 'layoutMode' && 'layoutMode' in node) {
-          if (typeof fix.target_value !== 'string') {
-            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
-            continue;
-          }
-          node.layoutMode = fix.target_value;
-          results.push(Object.assign({}, fix, { status: 'applied' }));
-
-        } else if (fix.property === 'primaryAxisSizingMode' && 'primaryAxisSizingMode' in node) {
-          if (typeof fix.target_value !== 'string') {
-            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
-            continue;
-          }
-          node.primaryAxisSizingMode = fix.target_value;
-          results.push(Object.assign({}, fix, { status: 'applied' }));
-
-        } else if (fix.property === 'counterAxisSizingMode' && 'counterAxisSizingMode' in node) {
-          if (typeof fix.target_value !== 'string') {
-            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
-            continue;
-          }
-          node.counterAxisSizingMode = fix.target_value;
-          results.push(Object.assign({}, fix, { status: 'applied' }));
-
-        } else {
-          results.push(Object.assign({}, fix, { status: 'unsupported_property' }));
+        if (!node) {
+          results.push(Object.assign({}, entry, { status: 'not_found' }));
+          continue;
         }
 
-      } catch (err) {
-        results.push(Object.assign({}, fix, { status: 'error', error: err.message }));
+        try {
+          if (patch.property === 'fills' || patch.property === 'strokes') {
+            const outcome = setPaintColor(node, patch.property, patch.new_value, patch.fill_index);
+            results.push(Object.assign({}, entry, { status: outcome.ok ? 'applied' : outcome.status }));
+
+          } else if (patch.property === 'textColor') {
+            if (node.type !== 'TEXT') {
+              results.push(Object.assign({}, entry, { status: 'unsupported_property' }));
+              continue;
+            }
+            const outcome = setPaintColor(node, 'fills', patch.new_value, 0);
+            results.push(Object.assign({}, entry, { status: outcome.ok ? 'applied' : outcome.status }));
+
+          } else if (patch.property === 'fontSize' && 'fontSize' in node) {
+            const fontSize = normalizeNumber(patch.new_value);
+            if (fontSize == null) {
+              results.push(Object.assign({}, entry, { status: 'invalid_value' }));
+              continue;
+            }
+            await loadTextNodeFontAsync(node);
+            node.fontSize = fontSize;
+            results.push(Object.assign({}, entry, { status: 'applied' }));
+
+          } else if (patch.property === 'cornerRadius' && 'cornerRadius' in node) {
+            const cornerRadius = normalizeNumber(patch.new_value);
+            if (cornerRadius == null) {
+              results.push(Object.assign({}, entry, { status: 'invalid_value' }));
+              continue;
+            }
+            node.cornerRadius = cornerRadius;
+            results.push(Object.assign({}, entry, { status: 'applied' }));
+
+          } else if (patch.property === 'width') {
+            const outcome = resizeNode(node, patch.new_value, null);
+            results.push(Object.assign({}, entry, { status: outcome.ok ? 'applied' : outcome.status }));
+
+          } else if (patch.property === 'height') {
+            const outcome = resizeNode(node, null, patch.new_value);
+            results.push(Object.assign({}, entry, { status: outcome.ok ? 'applied' : outcome.status }));
+
+          } else if (patch.property === 'resize') {
+            const value = patch.new_value || {};
+            const outcome = resizeNode(node, value.width, value.height);
+            results.push(Object.assign({}, entry, { status: outcome.ok ? 'applied' : outcome.status }));
+
+          } else if (patch.property === 'itemSpacing' && 'itemSpacing' in node) {
+            const spacing = normalizeNumber(patch.new_value);
+            if (spacing == null) {
+              results.push(Object.assign({}, entry, { status: 'invalid_value' }));
+              continue;
+            }
+            node.itemSpacing = spacing;
+            results.push(Object.assign({}, entry, { status: 'applied' }));
+
+          } else if (typeof patch.property === 'string' && patch.property.startsWith('padding.') && 'paddingTop' in node) {
+            const side = patch.property.split('.')[1];
+            const map  = { top: 'paddingTop', right: 'paddingRight', bottom: 'paddingBottom', left: 'paddingLeft' };
+            if (map[side]) {
+              const paddingValue = normalizeNumber(patch.new_value);
+              if (paddingValue == null) {
+                results.push(Object.assign({}, entry, { status: 'invalid_value' }));
+                continue;
+              }
+              node[map[side]] = paddingValue;
+              results.push(Object.assign({}, entry, { status: 'applied' }));
+            } else {
+              results.push(Object.assign({}, entry, { status: 'unsupported_property' }));
+            }
+
+          } else if (patch.property === 'layoutMode' && 'layoutMode' in node) {
+            if (typeof patch.new_value !== 'string') {
+              results.push(Object.assign({}, entry, { status: 'invalid_value' }));
+              continue;
+            }
+            node.layoutMode = patch.new_value;
+            results.push(Object.assign({}, entry, { status: 'applied' }));
+
+          } else if (patch.property === 'primaryAxisSizingMode' && 'primaryAxisSizingMode' in node) {
+            if (typeof patch.new_value !== 'string') {
+              results.push(Object.assign({}, entry, { status: 'invalid_value' }));
+              continue;
+            }
+            node.primaryAxisSizingMode = patch.new_value;
+            results.push(Object.assign({}, entry, { status: 'applied' }));
+
+          } else if (patch.property === 'counterAxisSizingMode' && 'counterAxisSizingMode' in node) {
+            if (typeof patch.new_value !== 'string') {
+              results.push(Object.assign({}, entry, { status: 'invalid_value' }));
+              continue;
+            }
+            node.counterAxisSizingMode = patch.new_value;
+            results.push(Object.assign({}, entry, { status: 'applied' }));
+
+          } else {
+            results.push(Object.assign({}, entry, { status: 'unsupported_property' }));
+          }
+
+        } catch (err) {
+          results.push(Object.assign({}, entry, { status: 'error', error: err.message }));
+        }
       }
     }
 

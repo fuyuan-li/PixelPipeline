@@ -333,6 +333,18 @@ definition:
 
           Step 4: Traverse ALL nodes recursively.
             For each node, apply Case A or Case B logic above.
+            While traversing, capture current_properties for each matched node:
+              - fills: first fill color as hex string (if SOLID fill exists), else null
+              - strokes: first stroke color as hex string (if SOLID stroke exists), else null
+              - cornerRadius: node.cornerRadius if numeric, else null
+              - width: node.width
+              - height: node.height
+              - fontSize: for TEXT descendants — first child TEXT node's fontSize, else null
+              - itemSpacing: node.itemSpacing if present, else null
+              - padding: { top, right, bottom, left } from node.padding if present, else null
+            Also capture child_text_node_id and child_icon_node_id (the node IDs of the first
+            TEXT child and first VECTOR/BOOLEAN_OPERATION child, if any) — the patch planner
+            needs these to target sub-node patches without re-reading the tree.
             Build a findings list.
 
           Step 5: Commit the migration plan:
@@ -359,43 +371,73 @@ definition:
                 "node_id":               "1:234",
                 "node_name":             "Section 4",
                 "node_type":             "FRAME",
-                "node_width":            375,
-                "node_height":           80,
                 "case":                  "B",
                 "semantic_type":         "Navigation Bar",
                 "inference_reason":      "Full-width FRAME (375×80px) with 3 children each containing icon+text. Name 'Section 4' also matches nav pattern.",
                 "source_component":      null,
                 "target_component_id":   "md.comp.navigation-bar",
                 "target_component_name": "Navigation Bar",
-                "confidence":            "high"
+                "confidence":            "high",
+                "current_properties": {
+                  "fills":        "#1C1B1F",
+                  "strokes":      null,
+                  "cornerRadius": 0,
+                  "width":        375,
+                  "height":       80,
+                  "fontSize":     null,
+                  "itemSpacing":  8,
+                  "padding":      { "top": 0, "right": 0, "bottom": 0, "left": 0 }
+                },
+                "child_text_node_id": "1:235",
+                "child_icon_node_id": "1:236"
               },
               {
                 "node_id":               "1:100",
                 "node_name":             "Button/Filled button",
                 "node_type":             "INSTANCE",
-                "node_width":            160,
-                "node_height":           40,
                 "case":                  "A",
                 "semantic_type":         "Filled Button",
                 "inference_reason":      "mainComponentName = 'Button/Filled button' — direct instance identification.",
                 "source_component":      "Button/Filled button",
                 "target_component_id":   "md.comp.filled-button",
                 "target_component_name": "Filled Button",
-                "confidence":            "high"
+                "confidence":            "high",
+                "current_properties": {
+                  "fills":        "#6750A4",
+                  "strokes":      null,
+                  "cornerRadius": 100,
+                  "width":        160,
+                  "height":       40,
+                  "fontSize":     14,
+                  "itemSpacing":  null,
+                  "padding":      null
+                },
+                "child_text_node_id": "1:101",
+                "child_icon_node_id": null
               },
               {
                 "node_id":               "1:50",
                 "node_name":             "Rectangle 4",
                 "node_type":             "RECTANGLE",
-                "node_width":            375,
-                "node_height":           1,
                 "case":                  "B",
                 "semantic_type":         "Divider",
                 "inference_reason":      "RECTANGLE with height=1px and width=375px. Classic thin separator pattern.",
                 "source_component":      null,
                 "target_component_id":   "md.comp.divider",
                 "target_component_name": "Divider",
-                "confidence":            "high"
+                "confidence":            "high",
+                "current_properties": {
+                  "fills":        "#CAC4D0",
+                  "strokes":      null,
+                  "cornerRadius": 0,
+                  "width":        375,
+                  "height":       1,
+                  "fontSize":     null,
+                  "itemSpacing":  null,
+                  "padding":      null
+                },
+                "child_text_node_id": null,
+                "child_icon_node_id": null
               }
             ]
           }
@@ -418,6 +460,7 @@ definition:
     # 4. COMPONENT PATCH PLANNER
     #    Expands matched DS components into normalized property patches and
     #    writes the patch plan consumed by the migration writer.
+    #    Reads only migration-plan.json + ds-catalog.json — no figma export.
     # ──────────────────────────────────────────────────────────────────────────
     - prompt_id: "component_patch_planner_prompt"
       name: "Component Patch Planner"
@@ -426,48 +469,53 @@ definition:
           You are the Component Patch Planner for the Design System Migration pipeline.
 
           Convert component migration recommendations into conservative
-          property-level Figma patches.
+          property-level Figma patches grouped by node.
 
-          Read:
-            - demo/component-migration-plan.json
-            - demo/ds-catalog.json
-            - the exported Figma JSON under demo/figma-exports/*.json
+          You have everything you need in two files:
+            - demo/component-migration-plan.json  (has node IDs, current_properties,
+              child_text_node_id, child_icon_node_id, target_component_id)
+            - demo/ds-catalog.json  (has DS token specs per component)
 
-          For each migration:
-            - match the root node by migration.node_id
-            - match the target DS component by migration.target_component_id
-            - normalize DS tokens into only this v1 property set:
-              fills, strokes, textColor, fontSize, cornerRadius, width, height,
-              itemSpacing, padding.top, padding.right, padding.bottom, padding.left
-            - merge onto the existing node tree
-            - emit only changed properties
+          Do NOT read the Figma export. All current property values are already
+          captured in migration.current_properties by the classifier.
 
-          Normalization:
+          ── NORMALIZATION ──────────────────────────────────────────────────────
+
+          Convert DS token values to Figma-ready types:
             - "40px" → 40
-            - "0.875rem" → 14 using 16px = 1rem
-            - colors should be emitted as hex strings
+            - "0.875rem" → 14  (1rem = 16px)
+            - colors → hex strings (e.g. "#6750A4")
 
-          Useful token mappings:
-            - container-color, active-indicator-color, outline-color → fills/strokes
-            - label-text-color, icon-color → textColor or fills
-            - container-height, container-width → height/width
-            - container-shape → cornerRadius
-            - label-text-size → fontSize
-            - leading-space, trailing-space, top-space, bottom-space → padding.*
+          Token → property mapping:
+            container-color, active-indicator-color   → fills
+            outline-color                             → strokes
+            label-text-color, icon-color              → textColor (on text/icon child)
+            container-height                          → height
+            container-width                           → width
+            container-shape                           → cornerRadius
+            label-text-size                           → fontSize (on text child)
+            leading-space, trailing-space             → padding.left / padding.right
+            top-space, bottom-space                   → padding.top / padding.bottom
 
-          Patch scope:
-            - root node is always eligible
-            - at most one text descendant
-            - at most one icon descendant
-            - skip ambiguous descendants
-            - do not create, delete, or reorder nodes
+          ── PATCH SCOPE ────────────────────────────────────────────────────────
 
-          Confidence handling:
-            - high confidence → severity warning
-            - medium or low confidence → severity error
-            - if DS mapping is weak or normalization is unclear, emit no patches for that migration
+          For each migration, emit patches for up to 3 target nodes:
+            1. root node  (migration.node_id)         → structural props
+            2. text child (migration.child_text_node_id, if not null) → textColor, fontSize
+            3. icon child (migration.child_icon_node_id, if not null) → fills (icon color)
 
-          Be conservative. Skip uncertain patches instead of forcing a guess.
+          Rules:
+            - Only emit a patch if new_value differs from old_value
+            - old_value comes from migration.current_properties (root)
+              or null for child nodes (acceptable — plugin will still apply)
+            - Do not create, delete, or reorder nodes
+            - Skip a patch if the token value cannot be cleanly normalized
+
+          ── CONFIDENCE & SEVERITY ──────────────────────────────────────────────
+
+            - migration.confidence = "high"           → severity: "warning"
+            - migration.confidence = "medium" or "low"→ severity: "error"
+            - If DS mapping is entirely unclear, emit zero patches for that migration
 
           ── STEPS ──────────────────────────────────────────────────────────────
 
@@ -480,16 +528,13 @@ definition:
           Step 3: Read demo/ds-catalog.json.
             Base64-decode and read the components array.
 
-          Step 4: Find and read the exported Figma JSON from demo/figma-exports.
-            Base64-decode and traverse the exported node tree recursively.
+          Step 4: For each migration:
+            - look up the DS component by migration.target_component_id
+            - normalize its tokens using the mappings above
+            - compare to migration.current_properties to find changed properties
+            - build patches[] for root, text child, and icon child as applicable
 
-          Step 5: For each migration:
-            - find the matching root node by migration.node_id
-            - find the target DS component by migration.target_component_id
-            - build normalized_ds_spec
-            - produce planned_patches
-
-          Step 6: Commit demo/component-patch-plan.json:
+          Step 5: Commit demo/component-patch-plan.json:
             create_commit with branch=source_branch,
             commit_message: "chore: component patch plan [skip ci]"
             actions:
@@ -497,33 +542,59 @@ definition:
                 file_path: "demo/component-patch-plan.json"
                 content: <JSON string>
 
-          Output JSON must contain:
-            - generated_at
-            - target_design_system
-            - summary.migrations_seen
-            - summary.components_matched
-            - summary.components_missing
-            - summary.patches_planned
-            - patch_sets[]
+          ── OUTPUT FORMAT ──────────────────────────────────────────────────────
 
-          Each patch_set needs:
-            - node_id
-            - node_name
-            - target_component_id
-            - target_component_name
-            - confidence
-            - normalized_ds_spec
-            - planned_patches
-
-          Each planned_patches entry needs only:
-            - target_node_id
-            - target_node_name
-            - target_role
-            - property
-            - current_value
-            - target_value
-            - reason
-            - severity
+          {
+            "generated_at": "<ISO timestamp>",
+            "target_design_system": "<design_system_name>",
+            "summary": {
+              "migrations_seen": N,
+              "components_matched": N,
+              "components_missing": N,
+              "patches_planned": N
+            },
+            "patch_sets": [
+              {
+                "node_id":               "1:234",
+                "node_name":             "Section 4",
+                "target_component_id":   "md.comp.navigation-bar",
+                "target_component_name": "Navigation Bar",
+                "confidence":            "high",
+                "patches": [
+                  {
+                    "target_node_id":   "1:234",
+                    "target_node_name": "Section 4",
+                    "target_role":      "root",
+                    "property":         "height",
+                    "old_value":        80,
+                    "new_value":        80,
+                    "severity":         "warning",
+                    "reason":           "container-height token = 80px"
+                  },
+                  {
+                    "target_node_id":   "1:234",
+                    "target_node_name": "Section 4",
+                    "target_role":      "root",
+                    "property":         "fills",
+                    "old_value":        "#1C1B1F",
+                    "new_value":        "#FFFBFE",
+                    "severity":         "warning",
+                    "reason":           "container-color token = #FFFBFE"
+                  },
+                  {
+                    "target_node_id":   "1:235",
+                    "target_node_name": "Label",
+                    "target_role":      "text",
+                    "property":         "fontSize",
+                    "old_value":        null,
+                    "new_value":        12,
+                    "severity":         "warning",
+                    "reason":           "label-text-size token = 12sp"
+                  }
+                ]
+              }
+            ]
+          }
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -548,32 +619,37 @@ definition:
           Step 2: Call get_repository_file for "demo/component-patch-plan.json".
             Base64-decode. Read the patch_sets array and summary.
 
-          Step 3: Build the Figma Fix Spec — one entry per planned patch:
+          Step 3: Build the Figma Fix Spec — grouped by node (pass patch_sets through directly):
           {
             "generated_at": "<ISO timestamp>",
             "mr_iid": <merge_request_iid>,
             "source_branch": "<source_branch>",
+            "summary": "<copy summary from patch plan>",
             "fixes": [
               {
-                "node_id":               "<planned_patch.target_node_id>",
-                "node_name":             "<planned_patch.target_node_name>",
-                "root_node_id":          "<patch_set.node_id>",
-                "root_node_name":        "<patch_set.node_name>",
+                "node_id":               "<patch_set.node_id>",
+                "node_name":             "<patch_set.node_name>",
                 "target_component_id":   "<patch_set.target_component_id>",
                 "target_component_name": "<patch_set.target_component_name>",
-                "target_role":           "<planned_patch.target_role>",
-                "property":              "<planned_patch.property>",
-                "current_value":         "<planned_patch.current_value>",
-                "target_value":          "<planned_patch.target_value>",
                 "confidence":            "<patch_set.confidence>",
-                "severity":              "<planned_patch.severity>",
-                "reason":                "<planned_patch.reason>"
+                "patches": [
+                  {
+                    "target_node_id":   "<patch.target_node_id>",
+                    "target_node_name": "<patch.target_node_name>",
+                    "target_role":      "<patch.target_role>",
+                    "property":         "<patch.property>",
+                    "old_value":        "<patch.old_value>",
+                    "new_value":        "<patch.new_value>",
+                    "severity":         "<patch.severity>",
+                    "reason":           "<patch.reason>"
+                  }
+                ]
               }
             ]
           }
 
-          Include ALL planned patches, including medium/low-confidence ones.
-          Low-confidence entries should still appear in the plugin and be visually flagged.
+          Include ALL patch_sets including medium/low-confidence ones.
+          Low-confidence entries will be visually flagged in the plugin.
 
           Step 4: Commit the fix spec:
             create_commit with branch=source_branch,
