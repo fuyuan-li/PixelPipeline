@@ -46,113 +46,6 @@ async function init() {
 
 init();
 
-// ─── Component replacement helper ─────────────────────────────────────────
-//
-// Strategy for finding the right library component:
-//   1. Search all INSTANCE nodes on the current page for a mainComponent whose
-//      name contains fix.figma_search_name. If found, import by key and replace.
-//   2. If not found on page, try all pages (some teams place a component
-//      showcase page where all library components are instanced).
-//   3. If still not found, report "component_not_found" with guidance so the
-//      designer knows to place one instance of the target component first.
-//
-// Why this approach?
-//   figma.importComponentByKeyAsync(key) requires the Figma component key, which
-//   is unique to each published library file. Rather than hardcoding keys (which
-//   change when a library is republished), we discover the key at runtime by
-//   scanning existing instances. This works as long as the library is enabled
-//   and at least one instance of the target component exists somewhere in the file.
-
-async function applyComponentFix(fix, node, results) {
-  const searchName = (fix.figma_search_name || fix.inferred_component || '').toLowerCase();
-
-  // ── Step 1: Search all instances on all pages for a matching component key
-  let targetKey  = null;
-  let targetName = null;
-
-  const pagesToSearch = [figma.currentPage].concat(
-    figma.root.children.filter(p => p !== figma.currentPage)
-  );
-
-  outer:
-  for (var pi = 0; pi < pagesToSearch.length; pi++) {
-    var page = pagesToSearch[pi];
-    var instances;
-    try {
-      instances = page.findAllWithCriteria({ types: ['INSTANCE'] });
-    } catch (_) {
-      instances = page.findAll(function(n) { return n.type === 'INSTANCE'; });
-    }
-    for (var ii = 0; ii < instances.length; ii++) {
-      var inst = instances[ii];
-      if (inst.mainComponent) {
-        var compName = inst.mainComponent.name.toLowerCase();
-        if (compName.indexOf(searchName) !== -1) {
-          targetKey  = inst.mainComponent.key;
-          targetName = inst.mainComponent.name;
-          break outer;
-        }
-      }
-    }
-  }
-
-  if (!targetKey) {
-    // Couldn't find a matching component instance in the file.
-    results.push(Object.assign({}, fix, {
-      status:  'component_not_found',
-      message: 'No instance of "' + (fix.target_component_name || fix.figma_search_name) + '" found in this file. ' +
-               'To apply this fix: (1) enable the ' + (fix.target_component_name || 'design system') + ' library, ' +
-               '(2) place one instance of the "' + (fix.figma_search_name || fix.inferred_component) + '" component anywhere on the canvas, ' +
-               'then click Apply Fixes again.',
-    }));
-    return;
-  }
-
-  // ── Step 2: Import the component and create an instance
-  var comp     = await figma.importComponentByKeyAsync(targetKey);
-  var instance = comp.createInstance();
-
-  // Position at the same location as the original node
-  instance.x = node.x;
-  instance.y = node.y;
-
-  // Try to preserve width; height is driven by the component spec so we only
-  // override it if the component explicitly supports resizing.
-  try {
-    instance.resize(
-      fix.node_width  || node.width  || instance.width,
-      fix.node_height || node.height || instance.height
-    );
-  } catch (_) {
-    // Some components don't allow arbitrary resize — that's fine.
-  }
-
-  // ── Step 3: Replace the original node
-  var parent = node.parent;
-  if (parent) {
-    var idx = parent.children.indexOf(node);
-    if (idx !== -1) {
-      parent.insertChild(idx, instance);
-    } else {
-      parent.appendChild(instance);
-    }
-    node.remove();
-    results.push(Object.assign({}, fix, {
-      status:           'applied',
-      applied_component: targetName,
-    }));
-  } else {
-    // Node has no parent (unusual); append to current page instead.
-    figma.currentPage.appendChild(instance);
-    node.remove();
-    results.push(Object.assign({}, fix, {
-      status:           'applied',
-      applied_component: targetName,
-      note:             'Node had no parent; instance appended to current page.',
-    }));
-  }
-}
-
 // ─── hex ↔ Figma RGBA helpers ──────────────────────────────────────────────
 
 function hexToFigmaRgb(hex) {
@@ -165,6 +58,89 @@ function hexToFigmaRgb(hex) {
     g: parseInt(full.slice(2, 4), 16) / 255,
     b: parseInt(full.slice(4, 6), 16) / 255,
   };
+}
+
+function normalizeHexColor(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withHash = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
+  const clean = withHash.replace('#', '');
+  if (!/^[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(clean)) return null;
+  return `#${clean.toUpperCase()}`;
+}
+
+function normalizeNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+
+  if (/^-?\d+(\.\d+)?px$/.test(trimmed)) {
+    return parseFloat(trimmed.replace('px', ''));
+  }
+  if (/^-?\d+(\.\d+)?rem$/.test(trimmed)) {
+    return parseFloat(trimmed.replace('rem', '')) * 16;
+  }
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    return parseFloat(trimmed);
+  }
+  return null;
+}
+
+function clonePaintArray(paints) {
+  return JSON.parse(JSON.stringify(Array.isArray(paints) ? paints : []));
+}
+
+function buildSolidPaint(basePaint, hex) {
+  return Object.assign({}, basePaint || {}, {
+    type: 'SOLID',
+    visible: basePaint && basePaint.visible !== undefined ? basePaint.visible : true,
+    opacity: basePaint && basePaint.opacity !== undefined ? basePaint.opacity : 1,
+    blendMode: basePaint && basePaint.blendMode ? basePaint.blendMode : 'NORMAL',
+    color: hexToFigmaRgb(hex),
+  });
+}
+
+function setPaintColor(node, prop, targetValue, fillIndex) {
+  if (!(prop in node)) return { ok: false, status: 'unsupported_property' };
+
+  const hex = normalizeHexColor(targetValue);
+  if (!hex) return { ok: false, status: 'invalid_value' };
+
+  const paints = clonePaintArray(node[prop]);
+  const idx = typeof fillIndex === 'number' ? fillIndex : 0;
+
+  if (!paints[idx]) {
+    if (idx !== 0) return { ok: false, status: 'fill_index_missing' };
+    paints[idx] = buildSolidPaint(null, hex);
+  } else {
+    paints[idx] = buildSolidPaint(paints[idx], hex);
+  }
+
+  node[prop] = paints;
+  return { ok: true };
+}
+
+async function loadTextNodeFontAsync(node) {
+  if (!node || node.type !== 'TEXT') return;
+  if (node.fontName === figma.mixed || typeof node.fontName === 'symbol') return;
+  await figma.loadFontAsync(node.fontName);
+}
+
+function resizeNode(node, widthValue, heightValue) {
+  if (!('resize' in node)) return { ok: false, status: 'unsupported_property' };
+
+  const width  = widthValue  != null ? normalizeNumber(widthValue)  : node.width;
+  const height = heightValue != null ? normalizeNumber(heightValue) : node.height;
+
+  if (width == null || height == null) {
+    return { ok: false, status: 'invalid_value' };
+  }
+
+  node.resize(width, height);
+  return { ok: true };
 }
 
 // ─── message handler ───────────────────────────────────────────────────────
@@ -265,27 +241,7 @@ figma.ui.onmessage = async (msg) => {
     const results = [];
 
     for (const fix of msg.fixes) {
-
-      // ── Component replacement fix ────────────────────────────────────────
-      // This is handled separately because it may need to remove the original
-      // node and insert a new instance; we don't need to look up the node first
-      // (the node may not exist yet if we're doing a dry-run preview).
-      if (fix.property === 'component' || fix.fix_type === 'component') {
-        const node = figma.getNodeById(fix.node_id);
-        if (!node) {
-          results.push(Object.assign({}, fix, { status: 'not_found' }));
-          continue;
-        }
-        try {
-          await applyComponentFix(fix, node, results);
-        } catch (err) {
-          results.push(Object.assign({}, fix, { status: 'error', error: err.message }));
-        }
-        continue;
-      }
-
-      // ── Property-level fixes (color, font, layout) ───────────────────────
-      const node = figma.getNodeById(fix.node_id);
+      const node = figma.getNodeById(fix.target_node_id || fix.node_id);
 
       if (!node) {
         results.push(Object.assign({}, fix, { status: 'not_found' }));
@@ -293,37 +249,97 @@ figma.ui.onmessage = async (msg) => {
       }
 
       try {
-        if ((fix.property === 'fills' || fix.property === 'strokes') && fix.property in node) {
-          const prop  = fix.property;
-          const fills = JSON.parse(JSON.stringify(node[prop]));
-          const idx   = typeof fix.fill_index === 'number' ? fix.fill_index : 0;
+        if (fix.property === 'fills' || fix.property === 'strokes') {
+          const outcome = setPaintColor(node, fix.property, fix.target_value, fix.fill_index);
+          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
 
-          if (!fills[idx]) {
-            results.push(Object.assign({}, fix, { status: 'fill_index_missing' }));
+        } else if (fix.property === 'textColor') {
+          if (node.type !== 'TEXT') {
+            results.push(Object.assign({}, fix, { status: 'unsupported_property' }));
             continue;
           }
-
-          fills[idx] = Object.assign({}, fills[idx], { color: hexToFigmaRgb(fix.target_value) });
-          node[prop] = fills;
-          results.push(Object.assign({}, fix, { status: 'applied' }));
+          const outcome = setPaintColor(node, 'fills', fix.target_value, 0);
+          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
 
         } else if (fix.property === 'fontSize' && 'fontSize' in node) {
-          node.fontSize = fix.target_value;
+          const fontSize = normalizeNumber(fix.target_value);
+          if (fontSize == null) {
+            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
+            continue;
+          }
+          await loadTextNodeFontAsync(node);
+          node.fontSize = fontSize;
           results.push(Object.assign({}, fix, { status: 'applied' }));
+
+        } else if (fix.property === 'cornerRadius' && 'cornerRadius' in node) {
+          const cornerRadius = normalizeNumber(fix.target_value);
+          if (cornerRadius == null) {
+            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
+            continue;
+          }
+          node.cornerRadius = cornerRadius;
+          results.push(Object.assign({}, fix, { status: 'applied' }));
+
+        } else if (fix.property === 'width') {
+          const outcome = resizeNode(node, fix.target_value, null);
+          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
+
+        } else if (fix.property === 'height') {
+          const outcome = resizeNode(node, null, fix.target_value);
+          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
+
+        } else if (fix.property === 'resize') {
+          const value = fix.target_value || {};
+          const outcome = resizeNode(node, value.width, value.height);
+          results.push(Object.assign({}, fix, { status: outcome.ok ? 'applied' : outcome.status }));
 
         } else if (fix.property === 'itemSpacing' && 'itemSpacing' in node) {
-          node.itemSpacing = fix.target_value;
+          const spacing = normalizeNumber(fix.target_value);
+          if (spacing == null) {
+            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
+            continue;
+          }
+          node.itemSpacing = spacing;
           results.push(Object.assign({}, fix, { status: 'applied' }));
 
-        } else if (fix.property.startsWith('padding.') && 'paddingTop' in node) {
+        } else if (typeof fix.property === 'string' && fix.property.startsWith('padding.') && 'paddingTop' in node) {
           const side = fix.property.split('.')[1];
           const map  = { top: 'paddingTop', right: 'paddingRight', bottom: 'paddingBottom', left: 'paddingLeft' };
           if (map[side]) {
-            node[map[side]] = fix.target_value;
+            const paddingValue = normalizeNumber(fix.target_value);
+            if (paddingValue == null) {
+              results.push(Object.assign({}, fix, { status: 'invalid_value' }));
+              continue;
+            }
+            node[map[side]] = paddingValue;
             results.push(Object.assign({}, fix, { status: 'applied' }));
           } else {
             results.push(Object.assign({}, fix, { status: 'unsupported_property' }));
           }
+
+        } else if (fix.property === 'layoutMode' && 'layoutMode' in node) {
+          if (typeof fix.target_value !== 'string') {
+            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
+            continue;
+          }
+          node.layoutMode = fix.target_value;
+          results.push(Object.assign({}, fix, { status: 'applied' }));
+
+        } else if (fix.property === 'primaryAxisSizingMode' && 'primaryAxisSizingMode' in node) {
+          if (typeof fix.target_value !== 'string') {
+            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
+            continue;
+          }
+          node.primaryAxisSizingMode = fix.target_value;
+          results.push(Object.assign({}, fix, { status: 'applied' }));
+
+        } else if (fix.property === 'counterAxisSizingMode' && 'counterAxisSizingMode' in node) {
+          if (typeof fix.target_value !== 'string') {
+            results.push(Object.assign({}, fix, { status: 'invalid_value' }));
+            continue;
+          }
+          node.counterAxisSizingMode = fix.target_value;
+          results.push(Object.assign({}, fix, { status: 'applied' }));
 
         } else {
           results.push(Object.assign({}, fix, { status: 'unsupported_property' }));

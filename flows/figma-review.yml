@@ -15,7 +15,8 @@ description: |
        dimensions, name keywords, and child structure, then map to the target DS.
 
   The output is a machine-readable Fix Spec that the Figma CI plugin applies
-  to replace every element with the correct library component in one click.
+  as property-level patches, updating the exported design toward the target
+  design system without requiring a Figma library component key.
 public: true
 definition:
   version: v1
@@ -65,6 +66,21 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
+    - name: "component_patch_planner"
+      type: AgentComponent
+      prompt_id: "component_patch_planner_prompt"
+      inputs:
+        - "context:goal"
+        - "context:project_id"
+      toolset:
+        - get_merge_request
+        - list_repository_tree
+        - get_repository_file
+        - create_commit
+      ui_log_events:
+        - on_agent_final_answer
+        - on_tool_execution_success
+
     - name: "migration_writer"
       type: AgentComponent
       prompt_id: "migration_writer_prompt"
@@ -85,6 +101,8 @@ definition:
     - from: "ds_catalog_agent"
       to: "component_classifier"
     - from: "component_classifier"
+      to: "component_patch_planner"
+    - from: "component_patch_planner"
       to: "migration_writer"
     - from: "migration_writer"
       to: "end"
@@ -397,9 +415,202 @@ definition:
         timeout: 300
 
     # ──────────────────────────────────────────────────────────────────────────
-    # 4. MIGRATION WRITER
-    #    Reads the migration plan, generates the machine-readable fix spec for
-    #    the Figma plugin, and posts the human-readable MR summary comment.
+    # 4. COMPONENT PATCH PLANNER
+    #    Expands matched DS components into normalized property patches and
+    #    writes the patch plan consumed by the migration writer.
+    # ──────────────────────────────────────────────────────────────────────────
+    - prompt_id: "component_patch_planner_prompt"
+      name: "Component Patch Planner"
+      prompt_template:
+        system: |
+          You are the Component Patch Planner for the Design System Migration pipeline.
+
+          Your job: convert component migration recommendations into concrete,
+          property-level Figma patches.
+
+          You do NOT replace nodes with Figma library components.
+          Instead, you:
+            1. Read the target component's tokens from ds-catalog.json
+            2. Normalize those tokens into Figma-usable properties
+            3. Merge the target DS properties onto the existing exported node tree
+            4. Emit only the property changes that should be applied
+
+          This is a property-first migration, not structural reconstruction.
+
+          ── INPUTS ─────────────────────────────────────────────────────────────
+
+          Read these committed files from source_branch:
+            - demo/component-migration-plan.json
+            - demo/ds-catalog.json
+            - the exported Figma JSON under demo/figma-exports/*.json
+
+          ── PATCHING SCOPE ─────────────────────────────────────────────────────
+
+          For each migration:
+            - Patch the root node itself
+            - You MAY also patch existing descendant nodes already present in the
+              exported tree when they are clearly text-like or icon-like
+            - Do NOT create new nodes
+            - Do NOT delete nodes
+            - Do NOT reorder children
+            - Do NOT synthesize a new component tree
+
+          ── MERGE RULE ─────────────────────────────────────────────────────────
+
+          For every candidate property:
+            - If the target DS component clearly defines it, use the DS value
+            - If the target DS component does not define it, preserve the
+              existing exported value
+            - If applying the DS value would not change anything, omit the patch
+
+          ── NORMALIZED PROPERTY SCHEMA ────────────────────────────────────────
+
+          Normalize raw component tokens into Figma-usable properties using only
+          this v1 schema:
+            - fills
+            - strokes
+            - textColor
+            - fontSize
+            - cornerRadius
+            - width
+            - height
+            - itemSpacing
+            - padding.top
+            - padding.right
+            - padding.bottom
+            - padding.left
+            - layoutMode
+            - primaryAxisSizingMode
+            - counterAxisSizingMode
+
+          Numeric normalization rules:
+            - Convert "40px" → 40
+            - Convert "0.875rem" → 14 using 16px = 1rem
+            - Convert numeric strings like "500" → 500 only when the target
+              property is numeric and directly usable
+            - For colors, emit a hex string like "#6750A4"
+            - If a token cannot be safely normalized to this schema, omit it
+
+          Token → property guidance:
+            - container-color, active-indicator-color, outline-color → fills/strokes
+            - label-text-color, with-icon-icon-color, icon-color → textColor or fills
+            - container-height, container-width → height/width
+            - container-shape → cornerRadius
+            - label-text-size → fontSize
+            - leading-space, trailing-space, top-space, bottom-space → padding.*
+
+          Layout inference guidance:
+            - Only emit layoutMode or sizing mode patches when the target
+              component strongly implies them from token names or the existing
+              node is already in auto-layout
+            - Preserve existing layout-related values when the DS signal is weak
+
+          Descendant targeting guidance:
+            - Text descendants: patch fontSize and textColor when there is a
+              clear label/title descendant
+            - Icon descendants: patch fills/strokes when there is a clear icon-like
+              descendant (VECTOR, BOOLEAN_OPERATION, STAR, POLYGON)
+            - If multiple descendants are ambiguous, prefer patching only the root
+
+          Severity guidance:
+            - high confidence migration → severity "warning"
+            - medium or low confidence migration → severity "error"
+
+          ── STEPS ──────────────────────────────────────────────────────────────
+
+          Step 1: Parse merge_request_iid from goal. Call get_merge_request.
+            Note source_branch.
+
+          Step 2: Read demo/component-migration-plan.json.
+            Base64-decode and read the migrations array.
+
+          Step 3: Read demo/ds-catalog.json.
+            Base64-decode and read the components array.
+
+          Step 4: Find and read the exported Figma JSON from demo/figma-exports.
+            Base64-decode and traverse the exported node tree recursively.
+
+          Step 5: For each migration:
+            - find the matching root node by migration.node_id
+            - find the target DS component by migration.target_component_id
+            - build normalized_ds_spec
+            - produce planned_patches
+
+          Step 6: Commit demo/component-patch-plan.json:
+            create_commit with branch=source_branch,
+            commit_message: "chore: component patch plan [skip ci]"
+            actions:
+              - action: "create"
+                file_path: "demo/component-patch-plan.json"
+                content: <JSON string>
+
+          Shape of demo/component-patch-plan.json:
+          {
+            "generated_at": "<ISO timestamp>",
+            "target_design_system": "<design_system_name from ds-catalog>",
+            "summary": {
+              "migrations_seen": N,
+              "components_matched": N,
+              "components_missing": N,
+              "patches_planned": N
+            },
+            "patch_sets": [
+              {
+                "node_id": "1:15",
+                "node_name": "Section 4",
+                "target_component_id": "md.comp.bottom-app-bar",
+                "target_component_name": "Bottom App Bar",
+                "confidence": "high",
+                "normalized_ds_spec": {
+                  "fills": "#FFFFFF",
+                  "height": 80,
+                  "padding.left": 16,
+                  "padding.right": 16,
+                  "itemSpacing": 12
+                },
+                "planned_patches": [
+                  {
+                    "target_node_id": "1:15",
+                    "target_node_name": "Section 4",
+                    "target_role": "root",
+                    "property": "height",
+                    "current_value": 87,
+                    "target_value": 80,
+                    "reason": "Target DS Bottom App Bar container-height is 80px",
+                    "severity": "warning"
+                  },
+                  {
+                    "target_node_id": "14:60",
+                    "target_node_name": "Explore",
+                    "target_role": "text",
+                    "property": "fontSize",
+                    "current_value": 12,
+                    "target_value": 14,
+                    "reason": "Target DS label-text-size resolves to 14px",
+                    "severity": "warning"
+                  }
+                ]
+              }
+            ]
+          }
+
+          If the target DS component is missing, emit an empty planned_patches
+          array for that patch set and explain why in a top-level note field.
+
+          Be conservative. Emit only patches you can justify from the DS tokens
+          and the exported node tree.
+        user: |
+          Project ID: {{project_id}}
+          Goal: {{goal}}
+        placeholder: history
+      unit_primitives: []
+      params:
+        timeout: 240
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 5. MIGRATION WRITER
+    #    Reads the component patch plan, generates the machine-readable fix spec
+    #    for the Figma plugin, and posts the human-readable MR summary comment.
     # ──────────────────────────────────────────────────────────────────────────
     - prompt_id: "migration_writer_prompt"
       name: "Migration Writer"
@@ -409,34 +620,35 @@ definition:
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request. Note source_branch.
 
-          Step 2: Call get_repository_file for "demo/component-migration-plan.json".
-            Base64-decode. Read the migrations array and summary.
+          Step 2: Call get_repository_file for "demo/component-patch-plan.json".
+            Base64-decode. Read the patch_sets array and summary.
 
-          Step 3: Build the Figma Fix Spec — one entry per migration:
+          Step 3: Build the Figma Fix Spec — one entry per planned patch:
           {
             "generated_at": "<ISO timestamp>",
             "mr_iid": <merge_request_iid>,
             "source_branch": "<source_branch>",
             "fixes": [
               {
-                "node_id":               "<from migration>",
-                "node_name":             "<from migration>",
-                "fix_type":              "component",
-                "case":                  "A" or "B",
-                "semantic_type":         "<from migration>",
-                "source_component":      "<from migration, or null>",
-                "target_component_id":   "<from migration>",
-                "target_component_name": "<from migration>",
-                "node_width":            <number>,
-                "node_height":           <number>,
-                "confidence":            "<from migration>",
-                "reason":                "<from migration.inference_reason>"
+                "node_id":               "<planned_patch.target_node_id>",
+                "node_name":             "<planned_patch.target_node_name>",
+                "root_node_id":          "<patch_set.node_id>",
+                "root_node_name":        "<patch_set.node_name>",
+                "target_component_id":   "<patch_set.target_component_id>",
+                "target_component_name": "<patch_set.target_component_name>",
+                "target_role":           "<planned_patch.target_role>",
+                "property":              "<planned_patch.property>",
+                "current_value":         "<planned_patch.current_value>",
+                "target_value":          "<planned_patch.target_value>",
+                "confidence":            "<patch_set.confidence>",
+                "severity":              "<planned_patch.severity>",
+                "reason":                "<planned_patch.reason>"
               }
             ]
           }
 
-          Include ALL migrations regardless of confidence level.
-          Low-confidence entries will still appear in the plugin but be visually flagged.
+          Include ALL planned patches, including medium/low-confidence ones.
+          Low-confidence entries should still appear in the plugin and be visually flagged.
 
           Step 4: Commit the fix spec:
             create_commit with branch=source_branch,
@@ -453,28 +665,28 @@ definition:
 
           ## 🧩 Design System Migration Preview
 
-          **Target design system:** <design_system_name from migration plan>
+          **Target design system:** <design_system_name from component patch plan>
 
           ### Detected Elements
 
-          | # | Element | Type | Inferred As | → DS Component | Confidence |
-          |---|---------|------|-------------|----------------|------------|
-          | 1 | `Section 4` | FRAME | Navigation Bar | `Navigation Bar/Navigation Bar` | 🟢 High |
-          | 2 | `Rectangle 4` | RECTANGLE | Divider | `Divider/Divider` | 🟢 High |
-          | 3 | `Song 1` | FRAME | List Item | `Lists/1-line item` | 🟡 Medium |
+          | # | Element | → DS Component | Planned Patches | Confidence |
+          |---|---------|----------------|-----------------|------------|
+          | 1 | `Section 4` | `Bottom App Bar` | `height`, `fills`, `fontSize` | 🟢 High |
+          | 2 | `Rectangle 4` | `List Item` | `fills`, `padding.left` | 🟡 Medium |
+          | 3 | `Frame 10` | `Filled Icon Button` | `cornerRadius`, `width`, `height` | 🔴 Low |
 
           Confidence key: 🟢 High · 🟡 Medium · 🔴 Low
 
           ---
-          **Summary:** N elements scanned · N existing instances · N raw shapes inferred · **N to migrate**
+          **Summary:** N migrations seen · N components matched · N components missing · **N patches planned**
 
-          > *Each migration replaces the element with the correct library component — colours, typography, and shape automatically update to match the design system.*
+          > *Each migration updates the existing nodes with target design-system properties — colours, spacing, sizing, and layout shift toward the target system without requiring a library-component swap.*
 
           ---
-          🔧 **N migrations ready.** Open the Figma plugin → **Apply Fixes** tab to preview and apply.
+          🔧 **N property patches ready.** Open the Figma plugin → **Apply Fixes** tab to preview and apply.
 
           If there is nothing to migrate, post:
-          "✅ All elements already use the target design system's components. No migration needed."
+          "✅ No property patches were needed. The exported design already matches the target design system closely enough."
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}

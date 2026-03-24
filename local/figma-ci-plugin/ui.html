@@ -418,10 +418,15 @@
 
     if (msg.type === 'fixes-applied') {
       const applied = msg.results.filter(r => r.status === 'applied').length;
-      const failed  = msg.results.length - applied;
-      setStatus('applyStatus',
+      const failedResults = msg.results.filter(r => r.status !== 'applied');
+      const failed  = failedResults.length;
+      const failureSummary = failed
+        ? '<br><span style="color:#888">' + failedResults.slice(0, 3).map(formatFailureResult).join(' · ') + '</span>'
+        : '';
+      setStatusHTML('applyStatus',
         `✅ Applied ${applied} fix${applied !== 1 ? 'es' : ''}` +
-        (failed ? ` · ${failed} could not be applied` : ''),
+        (failed ? ` · ${failed} could not be applied` : '') +
+        failureSummary,
         'success'
       );
       document.getElementById('applyBtn') && (document.getElementById('applyBtn').disabled = false);
@@ -658,19 +663,20 @@
     }
 
     const items = fixes.map((fix, i) => {
-      const isColor = fix.property === 'fills' || fix.property === 'strokes';
-      const detail  = isColor
-        ? `<span class="color-swatch" style="background:${fix.target_value || '#ccc'}"></span>
-           <span class="fix-hex">${(fix.current_value || fix.current_hex || '?')}</span>
-           <span class="fix-arrow">→</span>
-           <span class="fix-hex">${fix.target_value}</span>`
-        : `<span class="fix-hex">${fix.target_value}</span>`;
+      const detail = formatFixDetail(fix);
+      const title  = fix.root_node_name && fix.root_node_name !== fix.node_name
+        ? `${fix.root_node_name} → ${fix.node_name}`
+        : (fix.node_name || fix.node_id);
+      const meta = [formatPropertyLabel(fix.property), fix.target_component_name, fix.target_role]
+        .filter(Boolean)
+        .join(' · ');
 
       return `
         <div class="fix-item severity-${fix.severity || 'warning'}">
           <input type="checkbox" id="fix-${i}" checked data-index="${i}">
           <div class="fix-item-body">
-            <div class="fix-item-name">${escHtml(fix.node_name || fix.node_id)}</div>
+            <div class="fix-item-name">${escHtml(title)}</div>
+            <div class="fix-reason">${escHtml(meta)}</div>
             <div class="fix-item-detail">${detail}</div>
             <div class="fix-reason">${escHtml(fix.reason || '')}</div>
           </div>
@@ -704,6 +710,64 @@
     document.getElementById('applyBtn').disabled = true;
     setStatus('applyStatus', `Applying ${selected.length} fix${selected.length !== 1 ? 'es' : ''}…`);
     parent.postMessage({ pluginMessage: { type: 'apply-fixes', fixes: selected } }, '*');
+  }
+
+  function isColorProperty(property) {
+    return property === 'fills' || property === 'strokes' || property === 'textColor';
+  }
+
+  function formatPropertyLabel(property) {
+    const labels = {
+      fills: 'Fill',
+      strokes: 'Stroke',
+      textColor: 'Text color',
+      fontSize: 'Font size',
+      cornerRadius: 'Corner radius',
+      width: 'Width',
+      height: 'Height',
+      resize: 'Resize',
+      itemSpacing: 'Item spacing',
+      layoutMode: 'Layout mode',
+      primaryAxisSizingMode: 'Primary sizing',
+      counterAxisSizingMode: 'Counter sizing',
+    };
+    if (labels[property]) return labels[property];
+    if (property && property.startsWith('padding.')) {
+      return `Padding ${property.split('.')[1]}`;
+    }
+    return property || 'Property';
+  }
+
+  function formatScalar(value) {
+    if (value === null || value === undefined || value === '') return '?';
+    if (typeof value === 'object') return escHtml(JSON.stringify(value));
+    return escHtml(String(value));
+  }
+
+  function formatFixDetail(fix) {
+    const current = formatScalar(fix.current_value ?? fix.current_hex);
+    const target  = formatScalar(fix.target_value);
+    if (isColorProperty(fix.property)) {
+      const swatchColor = typeof fix.target_value === 'string' ? fix.target_value : '#ccc';
+      return `
+        <span class="color-swatch" style="background:${escHtml(swatchColor)}"></span>
+        <span class="fix-hex">${current}</span>
+        <span class="fix-arrow">→</span>
+        <span class="fix-hex">${target}</span>`;
+    }
+    return `
+      <span class="fix-hex">${escHtml(formatPropertyLabel(fix.property))}</span>
+      <span class="fix-arrow">:</span>
+      <span class="fix-hex">${current}</span>
+      <span class="fix-arrow">→</span>
+      <span class="fix-hex">${target}</span>`;
+  }
+
+  function formatFailureResult(result) {
+    const name = escHtml(result.node_name || result.node_id || 'node');
+    const property = escHtml(formatPropertyLabel(result.property));
+    const status = escHtml(result.status || 'error');
+    return `${name} (${property}: ${status})`;
   }
 
   function escHtml(str) {
