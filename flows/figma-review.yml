@@ -166,14 +166,18 @@ definition:
             ref=source_branch). Base64-decode.
 
             Case A — File exists AND components array is non-empty:
-              Log: "✅ Catalog ready: <len(components)> components for <design_system_name>"
+              Log: "✅ Catalog ready: <len(components)> components and <len(tokens)> tokens for <design_system_name>"
               No further action. Proceed to the next agent.
 
-            Case B — File exists BUT components array is empty:
+            Case B — File exists, components array is empty, BUT tokens array is non-empty:
+              Log: "✅ Token-only catalog ready: <len(tokens)> tokens for <design_system_name>"
+              No further action. The classifier will use token inference mode.
+
+            Case C — File exists BUT both components and tokens arrays are empty:
               Log the warning field from the file.
               No further action. The classifier will use built-in rules.
 
-            Case C — File does not exist:
+            Case D — File does not exist:
               Call create_commit:
                 branch: source_branch
                 commit_message: "chore: ds component catalog fallback [skip ci]"
@@ -184,6 +188,7 @@ definition:
                       "design_system_name": null,
                       "slug": null,
                       "components": [],
+                      "tokens": [],
                       "warning": "Figma plugin did not commit the catalog. The classifier will use built-in rules."
                     }
 
@@ -213,7 +218,10 @@ definition:
 
           Your job: read every node in the Figma export and answer two questions:
             1. What semantic component type IS this node?  (e.g. "Primary Button")
-            2. What component in the target design system should REPLACE it?
+            2. What target design-system match should guide the migration?
+               This may be either:
+               - a real DS component, OR
+               - a set of inferred DS tokens when the DS has no component catalog
 
           You handle two cases:
 
@@ -226,7 +234,7 @@ definition:
 
           CASE B — Raw shape (FRAME, GROUP, RECTANGLE, not an INSTANCE)
             Use the inference rules below to determine semantic type.
-            Then map to the best matching component in the target DS.
+            Then map to the best matching target in the target DS.
 
           ── PRE-PASS: SIBLING TEXT ASSOCIATION ──────────────────────────────────
 
@@ -305,18 +313,48 @@ definition:
 
           ── MAPPING RULES ───────────────────────────────────────────────────────
 
-          After determining semantic_type, match it to the best component in
-          the ds-catalog.json components array.
+          After determining semantic_type, choose the target match:
 
-          Matching logic:
-            1. Exact name match: semantic_type === component.name
-            2. Partial name match: component.name contains semantic_type keyword
-               (e.g. semantic_type "Button" matches "Filled Button", "Outlined Button")
-               — prefer the most specific match; if ambiguous, prefer the Filled variant
-            3. Use component.tokens for additional signals:
-               - container-height token should roughly match the node's height
-               - container-shape: "9999px" → pill/circular; low px → rectangular
-            4. Fallback: pick the component whose name most closely matches
+          MODE 1 — Component mode
+            Use this when ds-catalog.json components array is non-empty.
+            Matching logic:
+              1. Exact name match: semantic_type === component.name
+              2. Partial name match: component.name contains semantic_type keyword
+                 (e.g. semantic_type "Button" matches "Filled Button", "Outlined Button")
+                 — prefer the most specific match; if ambiguous, prefer the Filled variant
+              3. Use component.tokens for additional signals:
+                 - container-height token should roughly match the node's height
+                 - container-shape: "9999px" → pill/circular; low px → rectangular
+              4. Fallback: pick the component whose name most closely matches
+
+          MODE 2 — Token inference mode
+            Use this when components array is empty BUT tokens array is non-empty.
+            In this mode:
+              - Do NOT invent a real DS component ID.
+              - Keep semantic_type exactly as your UI inference.
+              - Use target_component_name only as a semantic label for readability.
+              - Set target_component_id to null.
+              - Set target_mode to "token".
+              - Add inferred_tokens[] for the patch planner.
+
+            Token inference rules:
+              1. Prefer semantic token names over generic ones:
+                 - examples: field-01, text-placeholder, border-strong-01, icon-inverse
+              2. Match token names to the current node's visible role:
+                 - fills for container/background
+                 - strokes for borders/dividers
+                 - textColor for text/placeholder
+                 - fontSize for obvious text-size matches
+                 - cornerRadius for obvious rounded surfaces
+              3. Only infer conservative visual properties:
+                 fills, strokes, textColor, fontSize, cornerRadius
+              4. Do NOT infer layout/system structure:
+                 width, height, padding, itemSpacing, full form/modal container recipes
+              5. Confidence guidance:
+                 - high: field/input surfaces, dividers, placeholder text, simple button fills/text
+                 - medium: navigation/background tone or inverse/icon contrast
+                 - low: forms, modals, complex containers, ambiguous layer hierarchy
+              6. If uncertain, emit fewer inferred_tokens, lower confidence, and explain that the match is token-inferred rather than component-spec matched
 
           ── STEPS ───────────────────────────────────────────────────────────────
 
@@ -324,7 +362,7 @@ definition:
 
           Step 2: Read ds-catalog.json:
             Call get_repository_file (project_id, "demo/ds-catalog.json", ref=source_branch).
-            Base64-decode. This gives you the available target-DS components.
+            Base64-decode. This gives you the available target-DS components and tokens.
 
           Step 3: Find and read the Figma export:
             Call list_repository_tree (project_id, ref=source_branch, path="demo/figma-exports").
@@ -375,8 +413,10 @@ definition:
                 "semantic_type":         "Navigation Bar",
                 "inference_reason":      "Full-width FRAME (375×80px) with 3 children each containing icon+text. Name 'Section 4' also matches nav pattern.",
                 "source_component":      null,
+                "target_mode":           "component",
                 "target_component_id":   "md.comp.navigation-bar",
                 "target_component_name": "Navigation Bar",
+                "inferred_tokens":       [],
                 "confidence":            "high",
                 "current_properties": {
                   "fills":        "#1C1B1F",
@@ -399,8 +439,10 @@ definition:
                 "semantic_type":         "Filled Button",
                 "inference_reason":      "mainComponentName = 'Button/Filled button' — direct instance identification.",
                 "source_component":      "Button/Filled button",
+                "target_mode":           "component",
                 "target_component_id":   "md.comp.filled-button",
                 "target_component_name": "Filled Button",
+                "inferred_tokens":       [],
                 "confidence":            "high",
                 "current_properties": {
                   "fills":        "#6750A4",
@@ -423,8 +465,10 @@ definition:
                 "semantic_type":         "Divider",
                 "inference_reason":      "RECTANGLE with height=1px and width=375px. Classic thin separator pattern.",
                 "source_component":      null,
+                "target_mode":           "component",
                 "target_component_id":   "md.comp.divider",
                 "target_component_name": "Divider",
+                "inferred_tokens":       [],
                 "confidence":            "high",
                 "current_properties": {
                   "fills":        "#CAC4D0",
@@ -473,8 +517,9 @@ definition:
 
           You have everything you need in two files:
             - demo/component-migration-plan.json  (has node IDs, current_properties,
-              child_text_node_id, child_icon_node_id, target_component_id)
-            - demo/ds-catalog.json  (has DS token specs per component)
+              child_text_node_id, child_icon_node_id, target_component_id, target_mode,
+              inferred_tokens)
+            - demo/ds-catalog.json  (has DS token specs per component and token list)
 
           Do NOT read the Figma export. All current property values are already
           captured in migration.current_properties by the classifier.
@@ -486,7 +531,7 @@ definition:
             - "0.875rem" → 14  (1rem = 16px)
             - colors → hex strings (e.g. "#6750A4")
 
-          Token → property mapping:
+          Component-token → property mapping:
             container-color, active-indicator-color   → fills
             outline-color                             → strokes
             label-text-color, icon-color              → textColor (on text/icon child)
@@ -496,6 +541,13 @@ definition:
             label-text-size                           → fontSize (on text child)
             leading-space, trailing-space             → padding.left / padding.right
             top-space, bottom-space                   → padding.top / padding.bottom
+
+          Token-inference property mapping:
+            fills         → root fills
+            strokes       → root strokes
+            textColor     → text child fills
+            fontSize      → text child fontSize
+            cornerRadius  → root cornerRadius
 
           ── PATCH SCOPE ────────────────────────────────────────────────────────
 
@@ -526,13 +578,21 @@ definition:
             Base64-decode and read the migrations array.
 
           Step 3: Read demo/ds-catalog.json.
-            Base64-decode and read the components array.
+            Base64-decode and read the components array and tokens array.
 
           Step 4: For each migration:
-            - look up the DS component by migration.target_component_id
-            - normalize its tokens using the mappings above
-            - compare to migration.current_properties to find changed properties
-            - build patches[] for root, text child, and icon child as applicable
+            - If migration.target_mode == "component":
+              - look up the DS component by migration.target_component_id
+              - normalize its tokens using the component-token mappings above
+              - compare to migration.current_properties to find changed properties
+              - build patches[] for root, text child, and icon child as applicable
+            - If migration.target_mode == "token":
+              - do NOT look up migration.target_component_id
+              - read migration.inferred_tokens directly
+              - only allow properties: fills, strokes, textColor, fontSize, cornerRadius
+              - normalize each inferred token value
+              - build conservative patches from those inferred tokens only
+              - skip layout properties such as width, height, padding, itemSpacing
 
           Step 5: Commit demo/component-patch-plan.json:
             create_commit with branch=source_branch,

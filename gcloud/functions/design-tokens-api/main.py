@@ -6,13 +6,13 @@ HTTP GET endpoint that returns design system tokens and component specs stored i
 Endpoints:
     GET https://REGION-PROJECT.cloudfunctions.net/design-tokens-api
         ?system=md3            (required)  md3 | carbon | atlassian
-        &resource=tokens       (optional)  tokens (default) | components | all
+        &resource=all          (optional)  all (default) | tokens | components
         &type=COLOR            (optional)  COLOR | FLOAT | STRING | BOOLEAN  (tokens only)
         &q=primary             (optional)  substring search on token name  (tokens only)
         &group=color           (optional)  filter by group field  (tokens only)
 
 Responses:
-  resource=tokens (default):
+  resource=tokens:
     {
       "system": "Material Design 3",
       "slug":   "md3",
@@ -37,7 +37,7 @@ Responses:
       ]
     }
 
-  resource=all:
+  resource=all (default):
     Combined tokens + components response.
 
 Environment variables (set via gcloud deploy --set-env-vars):
@@ -85,7 +85,7 @@ def design_tokens_api(request):
 
     # ── Parse query params ──────────────────────────────────────────────────
     slug     = (request.args.get("system")   or "").strip().lower()
-    resource = (request.args.get("resource") or "components").strip().lower()
+    resource = (request.args.get("resource") or "all").strip().lower()
     ftype    = (request.args.get("type")     or "").strip().upper()
     query    = (request.args.get("q")        or "").strip().lower()
     group    = (request.args.get("group")    or "").strip().lower()

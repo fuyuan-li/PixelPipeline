@@ -457,15 +457,19 @@
       if (slug) {
         setStatus('submitStatus', `🎨 Fetching ${dsName} design tokens…`);
         try {
-          const tokenRes = await fetch(`${DESIGN_TOKENS_API}?system=${slug}&resource=components`);
+          const tokenRes = await fetch(`${DESIGN_TOKENS_API}?system=${slug}&resource=all`);
           if (tokenRes.ok) {
             const tokenData = await tokenRes.json();
             dsCatalog = {
               design_system_name: tokenData.system,
               slug:               tokenData.slug,
               components:         tokenData.components || [],
+              tokens:             tokenData.tokens || [],
             };
-            setStatus('submitStatus', `✅ Loaded ${dsCatalog.components.length} ${dsName} components`);
+            setStatus(
+              'submitStatus',
+              `✅ Loaded ${dsCatalog.components.length} ${dsName} components and ${dsCatalog.tokens.length} tokens`
+            );
           } else {
             throw new Error(`HTTP ${tokenRes.status}`);
           }
@@ -475,6 +479,7 @@
             design_system_name: dsName,
             slug,
             components: [],
+            tokens: [],
             warning: `Design Tokens API unavailable (${e.message}). The classifier will use built-in rules.`,
           };
         }
@@ -483,6 +488,7 @@
           design_system_name: null,
           slug:               null,
           components:         [],
+          tokens:             [],
           warning:            'No design system selected. The classifier will use built-in rules.',
         };
       }
