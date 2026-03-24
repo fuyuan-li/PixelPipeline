@@ -5,7 +5,7 @@ HTTP GET endpoint that returns design system tokens and component specs stored i
 
 Endpoints:
     GET https://REGION-PROJECT.cloudfunctions.net/design-tokens-api
-        ?system=md3            (required)  md3 | antd | carbon
+        ?system=md3            (required)  md3 | carbon | atlassian
         &resource=tokens       (optional)  tokens (default) | components | all
         &type=COLOR            (optional)  COLOR | FLOAT | STRING | BOOLEAN  (tokens only)
         &q=primary             (optional)  substring search on token name  (tokens only)
@@ -50,7 +50,7 @@ import functions_framework
 from google.cloud import storage
 
 GCS_BUCKET   = os.environ.get("GCS_BUCKET", "figma-design-tokens")
-VALID_SLUGS  = {"md3", "antd", "carbon"}
+VALID_SLUGS  = {"md3", "carbon", "atlassian"}
 
 # In-memory cache so repeated calls within the same instance don't re-hit GCS.
 _cache: dict = {}

@@ -1,19 +1,16 @@
 # Design System Token Scraper — configuration
 # =============================================
 # Specify which design systems to scrape.
-# Valid values: md3, antd, carbon
-#
-# To run only MD3:      comment out antd and carbon
-# To run all:          uncomment all three
+# Valid values: md3, carbon, atlassian
 #
 # CLI flags override this file:
-#   python main.py --systems md3 antd      (overrides 'systems' below)
-#   python main.py --dry-run               (overrides 'dry_run' below)
+#   python main.py --systems md3 carbon atlassian   (overrides 'systems' below)
+#   python main.py --dry-run                        (overrides 'dry_run' below)
 
 systems:
   - md3
-  # - antd
-  # - carbon
+  - carbon
+  - atlassian
 
 bucket: figma-design-tokens-gitlab-hackathon-figma
 

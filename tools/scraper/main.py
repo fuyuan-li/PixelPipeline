@@ -27,12 +27,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scrapers import md3, antd, carbon
+from scrapers import md3, carbon, atlassian
 
 SCRAPERS = {
-    "md3":    md3.scrape,
-    "antd":   antd.scrape,
-    "carbon": carbon.scrape,
+    "md3":       md3.scrape,
+    "carbon":    carbon.scrape,
+    "atlassian": atlassian.scrape,
 }
 
 CONFIG_FILE = Path(__file__).parent / "scraper.config.yml"

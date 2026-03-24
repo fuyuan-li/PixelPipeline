@@ -219,6 +219,7 @@
     <optgroup label="Supported">
       <option value="Material Design 3">Material Design 3 (Google)</option>
       <option value="Carbon Design System">Carbon Design System (IBM)</option>
+      <option value="Atlassian Design System">Atlassian Design System</option>
     </optgroup>
     <optgroup label="Variable Collections" id="varCollectionsGroup" style="display:none"></optgroup>
   </select>
@@ -299,8 +300,9 @@
   // 1:1 mapping from dropdown display name → API slug.
   // Keep in sync with: gcloud/functions/design-tokens-api/main.py VALID_SLUGS
   const DESIGN_SYSTEM_SLUG_MAP = {
-    'Material Design 3':    'md3',
-    'Carbon Design System': 'carbon',
+    'Material Design 3':       'md3',
+    'Carbon Design System':    'carbon',
+    'Atlassian Design System': 'atlassian',
   };
 
   // Returns the canonical design-system name to send to the agent.

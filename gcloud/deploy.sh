@@ -4,7 +4,7 @@
 #
 # What this does (in order):
 #   1. terraform init + apply  → creates GCS bucket + deploys Cloud Function
-#   2. Runs the Python scraper → populates GCS with md3.json / antd.json / carbon.json
+#   2. Runs the Python scraper → populates GCS with md3.json / carbon.json / atlassian.json
 #   3. Smoke-tests the Cloud Function
 #   4. Patches flows/figma-review.yml with the real Cloud Function URL
 #
@@ -93,7 +93,7 @@ fi
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt
 
-info "Running scraper (md3, antd, carbon)..."
+info "Running scraper (md3, carbon, atlassian)..."
 .venv/bin/python main.py --bucket "$BUCKET_NAME"
 
 # ── 3. Smoke test ─────────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@ echo "  GCS bucket         : gs://$BUCKET_NAME"
 echo ""
 echo "  Quick test:"
 echo "    curl '${FUNCTION_URL}?system=md3&type=COLOR'"
-echo "    curl '${FUNCTION_URL}?system=antd'"
+echo "    curl '${FUNCTION_URL}?system=atlassian'"
 echo "    curl '${FUNCTION_URL}?system=carbon&group=text'"
 echo ""
 echo "  Next: commit & push to GitLab, then test the full pipeline."
