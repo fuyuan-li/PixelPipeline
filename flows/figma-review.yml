@@ -175,19 +175,43 @@ definition:
             Use the inference rules below to determine semantic type.
             Then map to the best matching target in the target DS.
 
-          ── PRE-PASS: SIBLING TEXT ASSOCIATION ──────────────────────────────────
+          ── PRE-PASS: FLAT-SKETCH OWNERSHIP RESOLUTION ─────────────────────────
 
-          Before classifying, resolve logical text labels for flat/sketch designs
-          where TEXT nodes are siblings of RECTANGLE/FRAME rather than children.
+          Before classifying, resolve logical ownership for flat/sketch designs
+          where TEXT and icons are siblings of RECTANGLE/FRAME rather than children.
 
           For every RECTANGLE or FRAME node at any level:
             Collect all sibling TEXT nodes (same parent, not children) whose
-            (x, y) origin falls within this node's bounding box:
-              sibling.x >= node.x  AND  sibling.x <= node.x + node.width
-              sibling.y >= node.y  AND  sibling.y <= node.y + node.height
-            Treat those TEXT nodes as the logical label(s) of this node —
-            the same way you would treat a has_text_child = true case.
-            Do NOT classify those TEXT nodes separately; they belong to the node.
+            bounding box overlaps this node or whose center lies within this node:
+              sibling_center_x between node.x and node.x + node.width
+              sibling_center_y between node.y and node.y + node.height
+            Treat those TEXT nodes as the logical label(s) of this node.
+
+            Also collect sibling icon-like nodes that visually belong to the node:
+              - node.type in INSTANCE, FRAME, VECTOR, BOOLEAN_OPERATION
+              - width <= 40 AND height <= 40
+              - the icon is fully inside the rectangle/frame bounds OR sits within 8px of it
+            Treat these as attached accessory icons for the parent surface.
+
+            Ownership precedence:
+              1. Large surface node (RECTANGLE/FRAME)
+              2. Attached text/icon nodes inside that surface
+            Once a TEXT/icon node is attached to a parent surface, do NOT classify
+            that TEXT/icon node separately.
+
+            This rule is critical for sparse exports like:
+              - RECTANGLE named "btn" + sibling TEXT inside it
+              - RECTANGLE named "checkbox" + sibling INSTANCE named "check"
+              - RECTANGLE named "card" + sibling TEXT/icon rows inside it
+
+          ── PRE-PASS: REPEATED PATTERN GROUPING ────────────────────────────────
+
+          If 2 or more sibling RECTANGLE/FRAME nodes share a similar name and size
+          (same lowercased name or near-identical width/height within ~20px) and are
+          aligned in a row or column, treat them as repeated components.
+
+          If a larger sibling RECTANGLE/FRAME encloses those repeated components,
+          infer the larger surface as a "Container" rather than another card/button.
 
           ── PRE-PASS: REACTIONS (highest-confidence signal) ─────────────────────
 
@@ -202,8 +226,83 @@ definition:
 
           Look at each node's: type, name, width, height, cornerRadius,
           structural_summary (child_count, child_types, has_text_child,
-          has_icon_child, text_content), resolved sibling text labels (from
-          pre-pass above), reactions, and position in the tree.
+          has_icon_child, text_content), resolved sibling text labels and
+          attached sibling icons (from pre-pass above), reactions, repeated
+          sibling patterns, and position in the tree.
+
+          Apply the following rules in priority order. Earlier rules win.
+
+          RULE: App Bar
+            Trigger: node.type is RECTANGLE or FRAME
+            AND (width >= 320 OR width >= 0.85 * parent.width)
+            AND height between 56–96
+            AND node is near the top of its parent (low y value, often y <= 40)
+            AND (
+              name lowercased contains "app", "header", "top bar", "bar"
+              OR it has a resolved title text inside
+              OR it has a leading menu/back icon inside
+            )
+            → semantic_type: "App Bar"
+            → Rationale: wide top header surface with title and optional leading icon
+
+          RULE: Container
+            Trigger: node.type is RECTANGLE or FRAME
+            AND width >= 240
+            AND height >= 140
+            AND (
+              name lowercased contains "list", "container", "panel", "surface"
+              OR it encloses 2 or more repeated cards/rows/checkbox-items
+              OR it visually acts as the background block behind a cluster of controls
+            )
+            AND node is NOT the top-level device frame/canvas
+            → semantic_type: "Container"
+            → Rationale: structural grouping surface that holds multiple child elements
+
+          RULE: Elevated Card
+            Trigger: node.type is RECTANGLE or FRAME
+            AND (
+              name lowercased contains "card"
+              OR (
+                width between 220–340
+                AND height between 56–140
+                AND (
+                  it has resolved text labels inside
+                  OR it has attached accessory icons inside
+                  OR it appears in a repeated stack of similarly-sized "card" siblings
+                )
+              )
+            )
+            → semantic_type: "Elevated Card"
+            → Rationale: content surface representing a row/card item even if the sketch omitted radius/elevation
+
+          RULE: Checkbox
+            Trigger: node.type is RECTANGLE or FRAME
+            AND width between 16–40
+            AND height between 16–40
+            AND aspect ratio is roughly square
+            AND (
+              name lowercased contains "checkbox", "check", "tick"
+              OR it contains/owns a checkmark icon instance
+            )
+            → semantic_type: "Checkbox"
+            → Rationale: small square selection control; classify the box, not the inner check icon
+
+          RULE: Button
+            Trigger: node.type is RECTANGLE or FRAME
+            AND (
+              name lowercased contains "button", "btn", "cta", "action"
+              OR (
+                height between 40–72
+                AND width between 72–240
+                AND it has resolved label text inside
+              )
+            )
+            AND Checkbox did not already match
+            → semantic_type: "Button"
+            → Rationale: tappable text-bearing control
+            Extra guidance:
+              - If it has a readable text label like "Explore" or "Post", keep it as "Button".
+              - Only use icon-button semantics when there is no text label and the control is icon-only.
 
           RULE: Divider
             Trigger: (height ≤ 4 AND width > 60)
@@ -228,31 +327,13 @@ definition:
             → semantic_type: "List Item"
             → Rationale: repeating row element with text content
 
-          RULE: Top App Bar / Header
-            Trigger: node.type === "FRAME" AND height between 48–112 AND width ≥ 300
-            AND node is at the TOP of its parent (low y value relative to siblings)
-            OR: name lowercased contains "header", "top bar", "app bar", "section 1", "section 2", "section 3"
-            → semantic_type: "Top App Bar"
-            Trigger: if node.type === rectangle AND name lowercased contains "header", "app", "bar" 
-            AND height between 70-100 AND width ≥ 400
-            OR it has child with name containing "hamburger" or "menu" 
-            → semantic_type: "Top App Bar" or "XR App Bar"
-
-          RULE: Button
-            Trigger: node.type === "FRAME" AND height between 32–56 AND width between 64–240
-            AND structural_summary.has_text_child === true
-            OR: name lowercased contains "button", "btn", "cta"
-            → semantic_type: "Button"
-
-          RULE: Card
-            Trigger: node.type === "FRAME" AND cornerRadius ≥ 8
-            AND structural_summary.has_text_child === true
-            → semantic_type: "Card"
-
           SKIP THESE (do not classify):
             - Top-level device frame (e.g. "iPhone 13 & 14 - 2") — it is the canvas, not a component
             - Pure TEXT nodes
             - Nodes that are already a perfect INSTANCE of a target-DS component
+            - Attached accessory nodes already owned by a larger surface:
+              examples: a checkmark INSTANCE inside a checkbox, a chevron icon inside a card row,
+              a menu icon inside an app bar, or sibling TEXT already resolved to a parent surface
 
           ── MAPPING RULES ───────────────────────────────────────────────────────
 
@@ -260,15 +341,30 @@ definition:
 
           MODE 1 — Component mode
             Use this when ds-catalog.json components array is non-empty.
-            Matching logic:
+            First apply this deterministic preference table when available:
+              1. semantic_type "App Bar" → prefer component name "App Bar" (id `md.comp.app-bar`)
+              2. semantic_type "Button" → prefer component name "Button" (id `md.comp.button`)
+              3. semantic_type "Checkbox" → prefer component name "Checkbox" (id `md.comp.checkbox`)
+              4. semantic_type "Elevated Card" → prefer component name "Elevated Card" (id `md.comp.elevated-card`)
+              5. semantic_type "Container" → do NOT force a fake component match; use token mode with:
+                 target_component_id = null
+                 target_component_name = "Container"
+
+            Then apply generic matching logic for all other semantic types:
               1. Exact name match: semantic_type === component.name
               2. Partial name match: component.name contains semantic_type keyword
-                 (e.g. semantic_type "Button" matches "Filled Button", "Outlined Button")
-                 — prefer the most specific match; if ambiguous, prefer the Filled variant
               3. Use component.tokens for additional signals:
                  - container-height token should roughly match the node's height
                  - container-shape: "9999px" → pill/circular; low px → rectangular
               4. Fallback: pick the component whose name most closely matches
+
+            Important disambiguation:
+              - Do NOT upcast a text-labeled button to "Filled Icon Button" or other icon-button variants.
+                If there is visible label text, prefer the generic "Button".
+              - Do NOT map a generic header rectangle to Bottom App Bar / Top App Bar variants unless
+                the node name or size explicitly signals that specialized variant.
+              - For flat exports, explicit node names like "card", "checkbox", "btn", "list", "header"
+                outweigh the absence of nested child structure or missing corner radius/elevation.
 
           MODE 2 — Token inference mode
             Use this when components array is empty BUT tokens array is non-empty.
@@ -327,11 +423,11 @@ definition:
               - cornerRadius: node.cornerRadius if numeric, else null
               - width: node.width
               - height: node.height
-              - fontSize: for TEXT descendants — first child TEXT node's fontSize, else null
+              - fontSize: for the first logical text node (child TEXT or attached sibling TEXT), else null
               - itemSpacing: node.itemSpacing if present, else null
               - padding: { top, right, bottom, left } from node.padding if present, else null
-            Also capture child_text_node_id and child_icon_node_id (the node IDs of the first
-            TEXT child and first VECTOR/BOOLEAN_OPERATION child, if any) — the patch planner
+            Also capture child_text_node_id and child_icon_node_id using the first logical
+            owned text/icon node (actual child OR attached sibling) — the patch planner
             needs these to target sub-node patches without re-reading the tree.
             Build a findings list.
 
