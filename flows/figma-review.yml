@@ -125,7 +125,7 @@ definition:
             Extract N as the merge_request_iid.
 
           Step 2: Call get_merge_request (project_id, merge_request_iid).
-            Confirm the MR exists. Note source_branch.
+            Confirm the MR exists. Note source_branch and merge request description.
 
           Step 3: Call create_merge_request_note with body:
             "⏳ Design system migration analysis started…"
@@ -160,19 +160,13 @@ definition:
           ── STEPS ──────────────────────────────────────────────────────────────
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch and merge request description.
-
-          Step 2: Resolve the save folder from the merge request description.
-            Look for the exact marker:
-              <!-- FIGMA_SAVE_FOLDER: <value> -->
-            Rules:
-              - if marker is missing, use the repository root
-              - if value is "__ROOT__", use the repository root
-              - otherwise use the value exactly as the save folder
+            Note source_branch and merge request description, and find `<!-- FIGMA_SAVE_FOLDER: <value> -->`.
+            If value is "__ROOT__" or the marker is missing, use the repository root.
+            Otherwise use the value exactly as the save folder.
             Build a helper mentally:
               repo_path(file) = save_folder ? save_folder + "/" + file : file
 
-          Step 3: Call get_repository_file (project_id, repo_path("ds-catalog.json"),
+          Step 2: Call get_repository_file (project_id, repo_path("ds-catalog.json"),
             ref=source_branch). Base64-decode.
 
             Case A — File exists AND components array is non-empty:
@@ -369,23 +363,17 @@ definition:
           ── STEPS ───────────────────────────────────────────────────────────────
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch and merge request description.
-
-          Step 2: Resolve the save folder from the merge request description.
-            Look for:
-              <!-- FIGMA_SAVE_FOLDER: <value> -->
-            Rules:
-              - if marker is missing, use the repository root
-              - if value is "__ROOT__", use the repository root
-              - otherwise use the value exactly as the save folder
+            Note source_branch and merge request description, and find `<!-- FIGMA_SAVE_FOLDER: <value> -->`.
+            If value is "__ROOT__" or the marker is missing, use the repository root.
+            Otherwise use the value exactly as the save folder.
             Build a helper mentally:
               repo_path(file) = save_folder ? save_folder + "/" + file : file
 
-          Step 3: Read ds-catalog.json:
+          Step 2: Read ds-catalog.json:
             Call get_repository_file (project_id, repo_path("ds-catalog.json"), ref=source_branch).
             Base64-decode. This gives you the available target-DS components and tokens.
 
-          Step 4: Find and read the Figma export:
+          Step 3: Find and read the Figma export:
             Call list_repository_tree:
               - if save_folder is non-empty: path=save_folder
               - if save_folder is root: do not pass a path filter
@@ -394,7 +382,7 @@ definition:
             Call get_repository_file for that file path.
             Base64-decode. Read the "nodes" array.
 
-          Step 5: Traverse ALL nodes recursively.
+          Step 4: Traverse ALL nodes recursively.
             For each node, apply Case A or Case B logic above.
             While traversing, capture current_properties for each matched node:
               - fills: first fill color as hex string (if SOLID fill exists), else null
@@ -415,7 +403,7 @@ definition:
               - built the complete migrations[] array
               - verified the JSON is valid
 
-          Step 6: Commit the migration plan:
+          Step 5: Commit the migration plan:
             You MUST call create_commit to save your findings.
             Do NOT skip this step.
             Do NOT stop after analysis only.
@@ -430,7 +418,7 @@ definition:
                   file_path: repo_path("component-migration-plan.json")
                   content: <JSON string>
 
-          Shape of component-migration-plan.json:
+          component-migration-plan.json must match this schema:
           {
             "generated_at": "<ISO timestamp>",
             "target_design_system": "<design_system_name from ds-catalog>",
@@ -442,82 +430,30 @@ definition:
             },
             "migrations": [
               {
-                "node_id":               "1:234",
-                "node_name":             "Section 4",
-                "node_type":             "FRAME",
-                "case":                  "B",
-                "semantic_type":         "Navigation Bar",
-                "inference_reason":      "Full-width FRAME (375×80px) with 3 children each containing icon+text. Name 'Section 4' also matches nav pattern.",
-                "source_component":      null,
-                "target_mode":           "component",
-                "target_component_id":   "md.comp.navigation-bar",
-                "target_component_name": "Navigation Bar",
-                "inferred_tokens":       [],
-                "confidence":            "high",
+                "node_id": "...",
+                "node_name": "...",
+                "node_type": "...",
+                "case": "A|B",
+                "semantic_type": "...",
+                "inference_reason": "...",
+                "source_component": "<string|null>",
+                "target_mode": "component|token",
+                "target_component_id": "<string|null>",
+                "target_component_name": "...",
+                "inferred_tokens": [],
+                "confidence": "high|medium|low",
                 "current_properties": {
-                  "fills":        "#1C1B1F",
-                  "strokes":      null,
-                  "cornerRadius": 0,
-                  "width":        375,
-                  "height":       80,
-                  "fontSize":     null,
-                  "itemSpacing":  8,
-                  "padding":      { "top": 0, "right": 0, "bottom": 0, "left": 0 }
+                  "fills": "<hex|null>",
+                  "strokes": "<hex|null>",
+                  "cornerRadius": "<number|null>",
+                  "width": "<number>",
+                  "height": "<number>",
+                  "fontSize": "<number|null>",
+                  "itemSpacing": "<number|null>",
+                  "padding": "<object|null>"
                 },
-                "child_text_node_id": "1:235",
-                "child_icon_node_id": "1:236"
-              },
-              {
-                "node_id":               "1:100",
-                "node_name":             "Button/Filled button",
-                "node_type":             "INSTANCE",
-                "case":                  "A",
-                "semantic_type":         "Filled Button",
-                "inference_reason":      "mainComponentName = 'Button/Filled button' — direct instance identification.",
-                "source_component":      "Button/Filled button",
-                "target_mode":           "component",
-                "target_component_id":   "md.comp.filled-button",
-                "target_component_name": "Filled Button",
-                "inferred_tokens":       [],
-                "confidence":            "high",
-                "current_properties": {
-                  "fills":        "#6750A4",
-                  "strokes":      null,
-                  "cornerRadius": 100,
-                  "width":        160,
-                  "height":       40,
-                  "fontSize":     14,
-                  "itemSpacing":  null,
-                  "padding":      null
-                },
-                "child_text_node_id": "1:101",
-                "child_icon_node_id": null
-              },
-              {
-                "node_id":               "1:50",
-                "node_name":             "Rectangle 4",
-                "node_type":             "RECTANGLE",
-                "case":                  "B",
-                "semantic_type":         "Divider",
-                "inference_reason":      "RECTANGLE with height=1px and width=375px. Classic thin separator pattern.",
-                "source_component":      null,
-                "target_mode":           "component",
-                "target_component_id":   "md.comp.divider",
-                "target_component_name": "Divider",
-                "inferred_tokens":       [],
-                "confidence":            "high",
-                "current_properties": {
-                  "fills":        "#CAC4D0",
-                  "strokes":      null,
-                  "cornerRadius": 0,
-                  "width":        375,
-                  "height":       1,
-                  "fontSize":     null,
-                  "itemSpacing":  null,
-                  "padding":      null
-                },
-                "child_text_node_id": null,
-                "child_icon_node_id": null
+                "child_text_node_id": "<string|null>",
+                "child_icon_node_id": "<string|null>"
               }
             ]
           }
@@ -610,25 +546,19 @@ definition:
           ── STEPS ──────────────────────────────────────────────────────────────
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch and merge request description.
-
-          Step 2: Resolve the save folder from the merge request description.
-            Look for:
-              <!-- FIGMA_SAVE_FOLDER: <value> -->
-            Rules:
-              - if marker is missing, use the repository root
-              - if value is "__ROOT__", use the repository root
-              - otherwise use the value exactly as the save folder
+            Note source_branch and merge request description, and find `<!-- FIGMA_SAVE_FOLDER: <value> -->`.
+            If value is "__ROOT__" or the marker is missing, use the repository root.
+            Otherwise use the value exactly as the save folder.
             Build a helper mentally:
               repo_path(file) = save_folder ? save_folder + "/" + file : file
 
-          Step 3: Read repo_path("component-migration-plan.json").
+          Step 2: Read repo_path("component-migration-plan.json").
             Base64-decode and read the migrations array.
 
-          Step 4: Read repo_path("ds-catalog.json").
+          Step 3: Read repo_path("ds-catalog.json").
             Base64-decode and read the components array and tokens array.
 
-          Step 5: For each migration:
+          Step 4: For each migration:
             - If migration.target_mode == "component":
               - look up the DS component by migration.target_component_id
               - normalize its tokens using the component-token mappings above
@@ -642,7 +572,7 @@ definition:
               - build conservative patches from those inferred tokens only
               - skip layout properties such as width, height, padding, itemSpacing
 
-          Step 6: Commit repo_path("component-patch-plan.json"):
+          Step 5: Commit repo_path("component-patch-plan.json"):
             create_commit with branch=source_branch,
             commit_message: "chore: component patch plan [skip ci]"
             actions:
@@ -650,8 +580,7 @@ definition:
                 file_path: repo_path("component-patch-plan.json")
                 content: <JSON string>
 
-          ── OUTPUT FORMAT ──────────────────────────────────────────────────────
-
+          Output JSON must match this schema:
           {
             "generated_at": "<ISO timestamp>",
             "target_design_system": "<design_system_name>",
@@ -663,31 +592,21 @@ definition:
             },
             "patch_sets": [
               {
-                "node_id":               "1:234",
-                "node_name":             "Section 4",
-                "target_component_id":   "md.comp.navigation-bar",
-                "target_component_name": "Navigation Bar",
-                "confidence":            "high",
+                "node_id": "...",
+                "node_name": "...",
+                "target_component_id": "<string|null>",
+                "target_component_name": "...",
+                "confidence": "high|medium|low",
                 "patches": [
                   {
-                    "target_node_id":   "1:234",
-                    "target_node_name": "Section 4",
-                    "target_role":      "root",
-                    "property":         "height",
-                    "old_value":        80,
-                    "new_value":        80,
-                    "severity":         "warning",
-                    "reason":           "container-height token = 80px"
-                  },
-                  {
-                    "target_node_id":   "1:235",
-                    "target_node_name": "Label",
-                    "target_role":      "text",
-                    "property":         "fontSize",
-                    "old_value":        null,
-                    "new_value":        12,
-                    "severity":         "warning",
-                    "reason":           "label-text-size token = 12sp"
+                    "target_node_id": "...",
+                    "target_node_name": "...",
+                    "target_role": "root|text|icon",
+                    "property": "...",
+                    "old_value": "<any>",
+                    "new_value": "<any>",
+                    "severity": "warning|error",
+                    "reason": "..."
                   }
                 ]
               }
@@ -699,7 +618,7 @@ definition:
         placeholder: history
       unit_primitives: []
       params:
-        timeout: 240
+        timeout: 300
 
     # ──────────────────────────────────────────────────────────────────────────
     # 5. MIGRATION WRITER
@@ -713,22 +632,16 @@ definition:
           You are the Migration Writer for the Design System Migration pipeline.
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch and merge request description.
-
-          Step 2: Resolve the save folder from the merge request description.
-            Look for:
-              <!-- FIGMA_SAVE_FOLDER: <value> -->
-            Rules:
-              - if marker is missing, use the repository root
-              - if value is "__ROOT__", use the repository root
-              - otherwise use the value exactly as the save folder
+            Note source_branch and merge request description, and find `<!-- FIGMA_SAVE_FOLDER: <value> -->`.
+            If value is "__ROOT__" or the marker is missing, use the repository root.
+            Otherwise use the value exactly as the save folder.
             Build a helper mentally:
               repo_path(file) = save_folder ? save_folder + "/" + file : file
 
-          Step 3: Call get_repository_file for repo_path("component-patch-plan.json").
+          Step 2: Call get_repository_file for repo_path("component-patch-plan.json").
             Base64-decode. Read the patch_sets array and summary.
 
-          Step 4: Build the Figma Fix Spec — grouped by node (pass patch_sets through directly):
+          Step 3: Build the Figma Fix Spec — grouped by node (pass patch_sets through directly):
           {
             "generated_at": "<ISO timestamp>",
             "mr_iid": <merge_request_iid>,
@@ -736,21 +649,21 @@ definition:
             "summary": "<copy summary from patch plan>",
             "fixes": [
               {
-                "node_id":               "<patch_set.node_id>",
-                "node_name":             "<patch_set.node_name>",
-                "target_component_id":   "<patch_set.target_component_id>",
-                "target_component_name": "<patch_set.target_component_name>",
-                "confidence":            "<patch_set.confidence>",
+                "node_id": "...",
+                "node_name": "...",
+                "target_component_id": "<string|null>",
+                "target_component_name": "...",
+                "confidence": "high|medium|low",
                 "patches": [
                   {
-                    "target_node_id":   "<patch.target_node_id>",
-                    "target_node_name": "<patch.target_node_name>",
-                    "target_role":      "<patch.target_role>",
-                    "property":         "<patch.property>",
-                    "old_value":        "<patch.old_value>",
-                    "new_value":        "<patch.new_value>",
-                    "severity":         "<patch.severity>",
-                    "reason":           "<patch.reason>"
+                    "target_node_id": "...",
+                    "target_node_name": "...",
+                    "target_role": "root|text|icon",
+                    "property": "...",
+                    "old_value": "<any>",
+                    "new_value": "<any>",
+                    "severity": "warning|error",
+                    "reason": "..."
                   }
                 ]
               }
@@ -760,7 +673,7 @@ definition:
           Include ALL patch_sets including medium/low-confidence ones.
           Low-confidence entries will be visually flagged in the plugin.
 
-          Step 5: Commit the fix spec:
+          Step 4: Commit the fix spec:
             create_commit with branch=source_branch,
             commit_message: "chore: figma fix spec [skip ci]"
             actions:
@@ -768,7 +681,7 @@ definition:
                 file_path: repo_path("figma-fix-spec.json")
                 content: <JSON string from step 3>
 
-          Step 6: Post the MR comment using create_merge_request_note.
+          Step 5: Post the MR comment using create_merge_request_note.
             Format exactly as shown below.
 
           ── MR COMMENT FORMAT ───────────────────────────────────────────────────
