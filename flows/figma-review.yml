@@ -306,11 +306,11 @@ definition:
                   return save_folder + "/" + filename
 
           Step 2: Read ds-catalog.json:
-            Call get_repository_file (project_id, get_file_path("ds-catalog.json"), ref=source_branch).
+            Call get_repository_file (project_id, get_file_path("cache/ds-catalog.json"), ref=source_branch).
             Base64-decode. This gives you the available target-DS components and tokens.
 
           Step 3: Find and read the Figma export:
-            Call list_repository_tree (project_id, ref=source_branch, path=save_folder).
+            Call list_repository_tree (project_id, ref=source_branch, path=get_file_path("figma-export")).
             From the returned files, find the newest file whose basename matches
             "figma-export-*.json", then call get_repository_file for that file path.
             Base64-decode. Read the "nodes" array.
@@ -333,7 +333,7 @@ definition:
 
             CRITICAL: Do not proceed to Step 6 until you have:
               - scanned all nodes
-              - built the complete migrations[] array
+              - built the complete migrations[] arrayd
               - verified the JSON is valid
 
           Step 5: Commit the migration plan:
@@ -399,9 +399,10 @@ definition:
           Be exhaustive. Check EVERY node. Leave no untreated raw shapes.
           In your final answer, include these exact debug lines:
             save_folder:<value parsed from goal>
-            ds-catalog.json full path:<the exact file path you read from the repo>
-            figma export file path:<the exact file path you read from the repo>
-            commit file path:<computed path>
+            debug_output_path:<computed path>
+            full ds_catalog_path:<the exact file path you read from the repo>
+            full export_dir:<the exact directory path you export to>
+            actual_output_path:<the exact file path you committed the migration plan to>
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -430,7 +431,7 @@ definition:
               (has node IDs, current_properties,
               child_text_node_id, child_icon_node_id, target_component_id, target_mode,
               inferred_tokens)
-            - {save_folder}/ds-catalog.json
+            - {save_folder}/cache/ds-catalog.json
               (has DS token specs per component and token list)
 
           Do NOT read the Figma export. All current property values are already
@@ -494,7 +495,7 @@ definition:
           Step 2: Read get_file_path("component-migration-plan.json").
             Base64-decode and read the migrations array.
 
-          Step 3: Read get_file_path("ds-catalog.json").
+          Step 3: Read get_file_path("cache/ds-catalog.json").
             Base64-decode and read the components array and tokens array.
 
           Step 4: For each migration:
@@ -511,12 +512,12 @@ definition:
               - build conservative patches from those inferred tokens only
               - skip layout properties such as width, height, padding, itemSpacing
 
-          Step 5: Commit "demo/component-patch-plan.json":
+          Step 5: Commit get_file_path("component-patch-plan.json"):
             create_commit with branch=source_branch,
             commit_message: "chore: component patch plan [skip ci]"
             actions:
               - action: "create"
-                file_path: "demo/component-patch-plan.json"
+                file_path: get_file_path("component-patch-plan.json")
                 content: <JSON string>
 
           The commit JSON must match this schema:
@@ -581,9 +582,8 @@ definition:
             Use `<value>` exactly, or "" if the marker is missing.
             Build this debug path mentally:
               - debug_output_path = save_folder ? save_folder + "/figma-fix-spec.json" : "figma-fix-spec.json"
-            Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
 
-          Step 2: Call get_repository_file for "demo/component-patch-plan.json".
+          Step 2: Call get_repository_file for get_file_path("component-patch-plan.json").
             Base64-decode. Read the patch_sets array and summary.
 
           Step 3: Build the Figma Fix Spec — grouped by node (pass patch_sets through directly):
@@ -623,7 +623,7 @@ definition:
             commit_message: "chore: figma fix spec [skip ci]"
             actions:
               - action: "create"
-                file_path: "demo/figma-fix-spec.json"
+                file_path: get_file_path("figma-fix-spec.json")
                 content: <JSON string from step 3>
 
           Step 5: Post the MR comment using create_merge_request_note.
@@ -657,8 +657,7 @@ definition:
           "✅ No property patches were needed. The exported design already matches the target design system closely enough."
           In your final answer, include these exact debug lines:
             save_folder:<value parsed from goal>
-            debug_output_path:<computed path>
-            actual_output_path:demo/figma-fix-spec.json
+            output_path:<computed path>
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}

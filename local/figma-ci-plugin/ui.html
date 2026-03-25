@@ -482,8 +482,8 @@
 
       const ts           = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
       const reviewBranch = `figma/review-${ts}`;
-      const exportPath   = buildRepoPath(v.saveFolder, `figma-export-${ts}.json`);
-      const dsCatalogPath = buildRepoPath(v.saveFolder, 'ds-catalog.json');
+      const exportPath   = buildRepoPath(v.saveFolder, `figma-export/figma-export-${ts}.json`);
+      const dsCatalogPath = buildRepoPath(v.saveFolder, 'cache/ds-catalog.json');
 
       // ── Fetch design system catalog from Cloud Function (GCS) ────────────
       const slug   = figmaPayload.designSystem?.slug  || null;
