@@ -41,3 +41,4 @@ tools/scraper/output/
 gcloud/terraform/.terraform/
 gcloud/terraform/*.tfstate
 gcloud/terraform/*.tfstate.backup
+gitlab_doc.md

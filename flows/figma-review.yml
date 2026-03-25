@@ -42,8 +42,6 @@ definition:
       inputs:
         - "context:goal"
         - "context:project_id"
-        - "context:intake.final_answer.snapshot_save_folder"
-        - "context:intake.final_answer.mr_save_folder"
       toolset:
         - get_merge_request
         - list_repository_tree
@@ -59,8 +57,6 @@ definition:
       inputs:
         - "context:goal"
         - "context:project_id"
-        - "context:intake.final_answer.snapshot_save_folder"
-        - "context:intake.final_answer.mr_save_folder"
       toolset:
         - get_merge_request
         - list_repository_tree
@@ -76,8 +72,6 @@ definition:
       inputs:
         - "context:goal"
         - "context:project_id"
-        - "context:intake.final_answer.snapshot_save_folder"
-        - "context:intake.final_answer.mr_save_folder"
       toolset:
         - get_merge_request
         - get_repository_file
@@ -116,21 +110,23 @@ definition:
           Step 2: Call get_merge_request (project_id, merge_request_iid).
             Confirm the MR exists. Note source_branch and merge request description.
 
-          Step 3: Resolve two debug fields:
-            - snapshot_save_folder:
-              find the Snapshot row in the MR description:
-              `| **Snapshot** | \`<path>\` |`
-              use the parent directory of that path,
-              or "" if the row is missing or the path has no "/".
-            - mr_save_folder:
-              find `<SAVE_FOLDER><value>` in the goal text,
-              and use `<value>` exactly, or "" if the marker is missing.
+          Step 3: Resolve save_folder for debug purposes:
+            find `<SAVE_FOLDER><value>` in the goal text,
+            and use `<value>` exactly, or "" if the marker is missing.
 
           Step 4: Call create_merge_request_note with body:
             "⏳ Design system migration analysis started…"
 
-          Step 5: Output a final answer as raw JSON, with no markdown fence:
-            {"status":"started","source_branch":"<source_branch>","snapshot_save_folder":"<snapshot_save_folder>","mr_save_folder":"<mr_save_folder>"}
+          Step 5: Output below, with no markdown fence:
+            {
+                "status": "started",
+                "source_branch": "<source_branch>",
+                "save_folder": "<save_folder>",
+                "debug_info": {
+                  "debug_output_path": "...",
+                  "actual_output_path": "demo/component-migration-plan.json"
+                }
+            }
 
           Do NOT ask the user for anything.
         user: |
@@ -153,6 +149,10 @@ definition:
       name: "Component Classifier"
       prompt_template:
         system: |
+          Received inputs:
+          - project_id: {{project_id}}
+          - goal: {{goal}}
+
           You are the Component Classifier for the Design System Migration pipeline.
           This is the most important agent in the pipeline.
 
@@ -300,12 +300,10 @@ definition:
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
             Note source_branch.
-            Read the debug context values from the user prompt:
-              - snapshot_save_folder
-              - mr_save_folder
-            Build these debug paths mentally:
-              - snapshot_debug_output_path = snapshot_save_folder ? snapshot_save_folder + "/component-migration-plan.json" : "component-migration-plan.json"
-              - mr_debug_output_path = mr_save_folder ? mr_save_folder + "/component-migration-plan.json" : "component-migration-plan.json"
+            Parse save_folder from the goal text by finding `<SAVE_FOLDER><value>`.
+            Use `<value>` exactly, or "" if the marker is missing.
+            Build this debug path mentally:
+              - debug_output_path = save_folder ? save_folder + "/component-migration-plan.json" : "component-migration-plan.json"
             Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
 
           Step 2: Read ds-catalog.json:
@@ -401,16 +399,12 @@ definition:
 
           Be exhaustive. Check EVERY node. Leave no untreated raw shapes.
           In your final answer, include these exact debug lines:
-            snapshot_save_folder:<value from user prompt>
-            mr_save_folder:<value from user prompt>
-            snapshot_debug_output_path:<computed path>
-            mr_debug_output_path:<computed path>
+            save_folder:<value parsed from goal>
+            debug_output_path:<computed path>
             actual_output_path:demo/component-migration-plan.json
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
-          Snapshot Save Folder Context: {{snapshot_save_folder}}
-          MR Save Folder Context: {{mr_save_folder}}
         placeholder: history
       unit_primitives: []
       params:
@@ -432,11 +426,11 @@ definition:
           property-level Figma patches grouped by node.
 
           You have everything you need in two files:
-            - demo/component-migration-plan.json
+            - {save_folder}/component-migration-plan.json
               (has node IDs, current_properties,
               child_text_node_id, child_icon_node_id, target_component_id, target_mode,
               inferred_tokens)
-            - demo/ds-catalog.json
+            - {save_folder}/ds-catalog.json
               (has DS token specs per component and token list)
 
           Do NOT read the Figma export. All current property values are already
@@ -491,12 +485,10 @@ definition:
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
             Note source_branch.
-            Read the debug context values from the user prompt:
-              - snapshot_save_folder
-              - mr_save_folder
-            Build these debug paths mentally:
-              - snapshot_debug_output_path = snapshot_save_folder ? snapshot_save_folder + "/component-patch-plan.json" : "component-patch-plan.json"
-              - mr_debug_output_path = mr_save_folder ? mr_save_folder + "/component-patch-plan.json" : "component-patch-plan.json"
+            Parse save_folder from the goal text by finding `<SAVE_FOLDER><value>`.
+            Use `<value>` exactly, or "" if the marker is missing.
+            Build this debug path mentally:
+              - debug_output_path = save_folder ? save_folder + "/component-patch-plan.json" : "component-patch-plan.json"
             Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
 
           Step 2: Read "demo/component-migration-plan.json".
@@ -560,16 +552,13 @@ definition:
             ]
           }
           In your final answer, include these exact debug lines:
-            snapshot_save_folder:<value from user prompt>
-            mr_save_folder:<value from user prompt>
-            snapshot_debug_output_path:<computed path>
-            mr_debug_output_path:<computed path>
+            Input file: {save_folder}/component-migration-plan.json
+            save_folder:<value parsed from goal>
+            debug_output_path:<computed path>
             actual_output_path:demo/component-patch-plan.json
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
-          Snapshot Save Folder Context: {{snapshot_save_folder}}
-          MR Save Folder Context: {{mr_save_folder}}
         placeholder: history
       unit_primitives: []
       params:
@@ -588,12 +577,10 @@ definition:
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
             Note source_branch.
-            Read the debug context values from the user prompt:
-              - snapshot_save_folder
-              - mr_save_folder
-            Build these debug paths mentally:
-              - snapshot_debug_output_path = snapshot_save_folder ? snapshot_save_folder + "/figma-fix-spec.json" : "figma-fix-spec.json"
-              - mr_debug_output_path = mr_save_folder ? mr_save_folder + "/figma-fix-spec.json" : "figma-fix-spec.json"
+            Parse save_folder from the goal text by finding `<SAVE_FOLDER><value>`.
+            Use `<value>` exactly, or "" if the marker is missing.
+            Build this debug path mentally:
+              - debug_output_path = save_folder ? save_folder + "/figma-fix-spec.json" : "figma-fix-spec.json"
             Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
 
           Step 2: Call get_repository_file for "demo/component-patch-plan.json".
@@ -669,16 +656,12 @@ definition:
           If there is nothing to migrate, post:
           "✅ No property patches were needed. The exported design already matches the target design system closely enough."
           In your final answer, include these exact debug lines:
-            snapshot_save_folder:<value from user prompt>
-            mr_save_folder:<value from user prompt>
-            snapshot_debug_output_path:<computed path>
-            mr_debug_output_path:<computed path>
+            save_folder:<value parsed from goal>
+            debug_output_path:<computed path>
             actual_output_path:demo/figma-fix-spec.json
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
-          Snapshot Save Folder Context: {{snapshot_save_folder}}
-          MR Save Folder Context: {{mr_save_folder}}
         placeholder: history
       unit_primitives: []
       params:
