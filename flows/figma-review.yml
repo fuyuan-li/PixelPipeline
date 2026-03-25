@@ -331,18 +331,13 @@ definition:
             needs these to target sub-node patches without re-reading the tree.
             Build a findings list.
 
-            CRITICAL: Do not proceed to Step 6 until you have:
-              - scanned all nodes
-              - built the complete migrations[] arrayd
-              - verified the JSON is valid
-
           Step 5: Commit the migration plan:
             You MUST call create_commit to save your findings.
             Do NOT skip this step.
             Do NOT stop after analysis only.
             As soon as the analysis is complete and the JSON payload is ready, immediately call create_commit.
             The JSON must follow the exact schema shown below.
-            If you hit an error while building the JSON, explain the error in the content as best you can and still attempt the commit.
+            If you hit an error while building the JSON or while committing, first output/print the JSON as it is, and then print the error message, lastly explain the error in the content as best you can.
             Call create_commit:
               branch: source_branch
               commit_message: "chore: component migration plan [skip ci]"
