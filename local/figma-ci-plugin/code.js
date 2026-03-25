@@ -10,6 +10,7 @@ async function init() {
   const [
     projectPath,
     baseBranch,
+    saveFolder,
     token,
     lastReviewBranch,
     lastMrIid,
@@ -17,6 +18,7 @@ async function init() {
   ] = await Promise.all([
     figma.clientStorage.getAsync('projectPath'),
     figma.clientStorage.getAsync('baseBranch'),
+    figma.clientStorage.getAsync('saveFolder'),
     figma.clientStorage.getAsync('token'),
     figma.clientStorage.getAsync('lastReviewBranch'),
     figma.clientStorage.getAsync('lastMrIid'),
@@ -28,6 +30,7 @@ async function init() {
     settings: {
       projectPath:       projectPath       || '',
       baseBranch:        baseBranch        || 'main',
+      saveFolder:        typeof saveFolder === 'string' ? saveFolder : 'demo',
       token:             token             || '',
       lastReviewBranch:  lastReviewBranch  || '',
       lastMrIid:         lastMrIid         || '',
@@ -152,6 +155,7 @@ figma.ui.onmessage = async (msg) => {
     const s = msg.settings;
     await figma.clientStorage.setAsync('projectPath',        s.projectPath);
     await figma.clientStorage.setAsync('baseBranch',         s.baseBranch);
+    await figma.clientStorage.setAsync('saveFolder',         s.saveFolder);
     await figma.clientStorage.setAsync('selectedLibraryName', s.selectedLibraryName || '');
     if (s.rememberToken && s.token) {
       await figma.clientStorage.setAsync('token', s.token);

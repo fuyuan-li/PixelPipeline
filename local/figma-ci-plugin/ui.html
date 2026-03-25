@@ -213,6 +213,10 @@
   <label>Base Branch</label>
   <input type="text" id="baseBranch" placeholder="main" />
 
+  <label>Save Folder</label>
+  <input type="text" id="saveFolder" placeholder="demo" />
+  <div class="hint">Default: <code>demo</code>. Leave blank to save in the project root.</div>
+
   <label>Design System</label>
   <select id="librarySelect" onchange="onLibraryChange()">
     <option value="">— Select a design system —</option>
@@ -268,7 +272,8 @@
   const GITLAB_BASE_URL    = 'https://gitlab.com';
   const FLOW_ACCOUNT       = 'ai-figma-design-review-gitlab-ai-hackathon';
   const DESIGN_TOKENS_API  = 'https://design-tokens-api-sdzot2fiaq-uc.a.run.app';
-  const FIX_SPEC_PATH      = 'demo/figma-fix-spec.json';
+  const DEFAULT_SAVE_FOLDER = 'demo';
+  const ROOT_FOLDER_MARKER  = '__ROOT__';
   const FIX_POLL_INTERVAL_MS = 15000;
   const FIX_INPUT_DEBOUNCE_MS = 700;
 
@@ -320,11 +325,35 @@
     return { key: null, name: name, libraryName: name, slug: slug, type: 'named' };
   }
 
+  function normalizeSaveFolder(value) {
+    if (typeof value !== 'string') return DEFAULT_SAVE_FOLDER;
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    return trimmed.replace(/^\/+|\/+$/g, '');
+  }
+
+  function getSaveFolderValue() {
+    return normalizeSaveFolder(document.getElementById('saveFolder').value);
+  }
+
+  function buildRepoPath(saveFolder, fileName) {
+    return saveFolder ? `${saveFolder}/${fileName}` : fileName;
+  }
+
+  function getFixSpecPath(saveFolder) {
+    return buildRepoPath(saveFolder, 'figma-fix-spec.json');
+  }
+
+  function getSaveFolderMarker(saveFolder) {
+    return saveFolder || ROOT_FOLDER_MARKER;
+  }
+
   function getSubmitValues() {
     const lib = getSelectedLibrary();
     return {
       projectPath:         document.getElementById('projectPath').value.trim(),
       baseBranch:          document.getElementById('baseBranch').value.trim() || 'main',
+      saveFolder:          getSaveFolderValue(),
       selectedLibrary:     lib,
       selectedLibraryName: lib ? lib.name : '',
       token:               document.getElementById('token').value.trim(),
@@ -377,6 +406,7 @@
       const s = msg.settings;
       document.getElementById('projectPath').value  = s.projectPath;
       document.getElementById('baseBranch').value   = s.baseBranch;
+      document.getElementById('saveFolder').value   = s.saveFolder;
       document.getElementById('reviewBranch').value = s.lastReviewBranch;
       savedLibraryName = s.savedLibraryName || '';
       if (s.token) {
@@ -452,6 +482,8 @@
 
       const ts           = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
       const reviewBranch = `figma/review-${ts}`;
+      const exportPath   = buildRepoPath(v.saveFolder, `figma-export-${ts}.json`);
+      const dsCatalogPath = buildRepoPath(v.saveFolder, 'ds-catalog.json');
 
       // ── Fetch design system catalog from Cloud Function (GCS) ────────────
       const slug   = figmaPayload.designSystem?.slug  || null;
@@ -504,7 +536,6 @@
       });
       if (!branchRes.ok) throw new Error(`Branch creation failed (${branchRes.status})`);
 
-      const fileName      = `demo/figma-exports/${ts}.json`;
       const dsDisplayName = figmaPayload.designSystem
         ? `${figmaPayload.designSystem.libraryName || figmaPayload.designSystem.name} / ${figmaPayload.designSystem.collectionName || ''}`
         : '—';
@@ -529,12 +560,12 @@
             actions: [
               {
                 action:    'create',
-                file_path: fileName,
+                file_path: exportPath,
                 content:   JSON.stringify(figmaPayload, null, 2),
               },
               {
                 action:    'create',
-                file_path: 'demo/ds-catalog.json',
+                file_path: dsCatalogPath,
                 content:   JSON.stringify(dsCatalog, null, 2),
               },
             ],
@@ -554,9 +585,11 @@
         `| **Page** | ${pageName} |`,
         `| **Exported at** | ${figmaPayload.exportedAt} |`,
         `| **Design System** | ${dsDisplayName} (${varCount} variables) |`,
-        `| **Snapshot** | \`${fileName}\` |`,
+        `| **Save Folder** | \`${v.saveFolder || '(project root)'}\` |`,
+        `| **Snapshot** | \`${exportPath}\` |`,
         '',
         `---`,
+        `<!-- FIGMA_SAVE_FOLDER: ${getSaveFolderMarker(v.saveFolder)} -->`,
       ].join('\n');
 
       setStatus('submitStatus', '📬 Creating MR…');
@@ -624,9 +657,10 @@
 
   function getFixLookupValues() {
     return {
-      branch:  document.getElementById('reviewBranch').value.trim(),
-      token:   document.getElementById('token').value.trim(),
-      project: document.getElementById('projectPath').value.trim(),
+      branch:     document.getElementById('reviewBranch').value.trim(),
+      token:      document.getElementById('token').value.trim(),
+      project:    document.getElementById('projectPath').value.trim(),
+      saveFolder: getSaveFolderValue(),
     };
   }
 
@@ -672,7 +706,7 @@
       }
       const proj = await projRes.json();
 
-      const filePath = encodeURIComponent(FIX_SPEC_PATH);
+      const filePath = encodeURIComponent(getFixSpecPath(values.saveFolder));
       const specRes = await fetch(
         `${api}/projects/${proj.id}/repository/files/${filePath}?ref=${encodeURIComponent(values.branch)}`,
         { headers: h }
@@ -773,7 +807,7 @@
       if (!projRes.ok) throw new Error(`Project not found (${projRes.status})`);
       const proj = await projRes.json();
 
-      const filePath = encodeURIComponent(FIX_SPEC_PATH);
+      const filePath = encodeURIComponent(getFixSpecPath(values.saveFolder));
       const specRes  = await fetch(
         `${api}/projects/${proj.id}/repository/files/${filePath}?ref=${encodeURIComponent(branch)}`,
         { headers: h }
@@ -956,6 +990,7 @@
 
   document.getElementById('loadBtn').disabled = true;
   document.getElementById('projectPath').addEventListener('input', () => handleFixLookupInputsChanged());
+  document.getElementById('saveFolder').addEventListener('input', () => handleFixLookupInputsChanged());
   document.getElementById('token').addEventListener('input', () => handleFixLookupInputsChanged());
   document.getElementById('reviewBranch').addEventListener('input', () => handleFixLookupInputsChanged());
 </script>

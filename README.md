@@ -32,7 +32,7 @@ Instead of scraping component and token definitions during every review, we:
 - store them in isolated GCP storage objects,
 - expose them through a lightweight Cloud Function for fast lookup.
 
-This keeps the GitLab Flow fast, deterministic, and cheap during the demo.
+This keeps the GitLab Flow fast, deterministic, and resource efficient.
 
 ## High-Level Architecture
 
