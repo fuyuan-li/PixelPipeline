@@ -3,6 +3,17 @@ set -e
 
 # Usage: ./push.sh "your commit message"
 COMMIT_MSG="${1:-chore: update}"
+PLUGIN_DIR="local/figma-ci-plugin"
+PLUGIN_ZIP="$PLUGIN_DIR/figma-ci-plugin.zip"
+
+# ── 0. Rebuild plugin zip ────────────────────────────────────────────────────
+echo "🧩 Rebuilding Figma plugin zip"
+rm -f "$PLUGIN_ZIP"
+zip -j -q "$PLUGIN_ZIP" \
+  "$PLUGIN_DIR/manifest.json" \
+  "$PLUGIN_DIR/code.js" \
+  "$PLUGIN_DIR/ui.html" \
+  "$PLUGIN_DIR/README.md"
 
 # ── 1. Stage all changes ──────────────────────────────────────────────────────
 echo "📦 git add ."

@@ -12,6 +12,7 @@ __pycache__/
 # Build output
 dist/
 build/
+gcloud/terraform/.build/
 
 # OS files
 .DS_Store
@@ -24,6 +25,7 @@ Thumbs.db
 
 # Notes
 notes.txt
+TODO.md
 
 # Logs
 *.log
@@ -36,3 +38,6 @@ secrets.yml
 
 # local data
 tools/scraper/output/
+gcloud/terraform/.terraform/
+gcloud/terraform/*.tfstate
+gcloud/terraform/*.tfstate.backup

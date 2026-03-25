@@ -680,16 +680,6 @@ definition:
                     "reason":           "container-height token = 80px"
                   },
                   {
-                    "target_node_id":   "1:234",
-                    "target_node_name": "Section 4",
-                    "target_role":      "root",
-                    "property":         "fills",
-                    "old_value":        "#1C1B1F",
-                    "new_value":        "#FFFBFE",
-                    "severity":         "warning",
-                    "reason":           "container-color token = #FFFBFE"
-                  },
-                  {
                     "target_node_id":   "1:235",
                     "target_node_name": "Label",
                     "target_role":      "text",
