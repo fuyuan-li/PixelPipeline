@@ -1,50 +1,55 @@
 """
 Scraper for IBM Carbon Design System tokens.
 
-Primary source:
-  carbon-design-system/carbon — packages/themes/src/tokens/*.js
-  These are plain JS files that export objects of token→value.
+Primary sources:
+  carbon-design-system/carbon
+    - packages/themes/src/white.js          (theme colors)
+    - packages/colors/src/colors.js         (resolved color constants)
+    - packages/layout/src/index.js          (spacing/container/size/icon-size)
+    - packages/layout/src/tokens.js         (layout token list)
+    - packages/type/scss/_styles.scss       (typography maps)
+    - packages/type/src/scale.js            (resolved type scale)
+    - packages/type/src/fontWeight.js       (resolved font weights)
+    - packages/type/src/fontFamily.js       (resolved font families)
 
 Fallback:
-  Curated Carbon White theme tokens (the default / most-used theme).
+  Curated Carbon white theme colors + spacing + typography when GitHub is unavailable.
 """
 
 import re
-import json
 import requests
 
 GITHUB_RAW = "https://raw.githubusercontent.com/carbon-design-system/carbon/main"
-TIMEOUT    = 15
+TIMEOUT = 15
 
-# ── Theme files to fetch ──────────────────────────────────────────────────────
-THEME_FILES = {
-    "white": f"{GITHUB_RAW}/packages/themes/src/tokens/white.js",
-    "g10":   f"{GITHUB_RAW}/packages/themes/src/tokens/g10.js",
-}
+WHITE_THEME_URL = f"{GITHUB_RAW}/packages/themes/src/white.js"
+COLORS_JS_URL = f"{GITHUB_RAW}/packages/colors/src/colors.js"
+LAYOUT_INDEX_URL = f"{GITHUB_RAW}/packages/layout/src/index.js"
+LAYOUT_TOKENS_URL = f"{GITHUB_RAW}/packages/layout/src/tokens.js"
+TYPE_STYLES_URL = f"{GITHUB_RAW}/packages/type/scss/_styles.scss"
+TYPE_SCALE_URL = f"{GITHUB_RAW}/packages/type/src/scale.js"
+TYPE_FONT_WEIGHT_URL = f"{GITHUB_RAW}/packages/type/src/fontWeight.js"
+TYPE_FONT_FAMILY_URL = f"{GITHUB_RAW}/packages/type/src/fontFamily.js"
 
 # ── Fallback: Carbon White theme ──────────────────────────────────────────────
 # Source: https://carbondesignsystem.com/elements/color/tokens/
 FALLBACK_COLORS = {
-    # Background
     "background":            "#ffffff",
     "background-active":     "#c6c6c6",
     "background-hover":      "#e8e8e8",
     "background-selected":   "#e0e0e0",
     "background-inverse":    "#393939",
-    # Layer
     "layer-01":              "#f4f4f4",
     "layer-02":              "#ffffff",
     "layer-03":              "#f4f4f4",
     "layer-active-01":       "#c6c6c6",
     "layer-hover-01":        "#e8e8e8",
     "layer-selected-01":     "#e0e0e0",
-    # Border
     "border-subtle-00":      "#e0e0e0",
     "border-subtle-01":      "#c6c6c6",
     "border-strong-01":      "#8d8d8d",
     "border-inverse":        "#161616",
     "border-interactive":    "#0f62fe",
-    # Text
     "text-primary":          "#161616",
     "text-secondary":        "#525252",
     "text-placeholder":      "#a8a8a8",
@@ -52,29 +57,24 @@ FALLBACK_COLORS = {
     "text-inverse":          "#ffffff",
     "text-on-color":         "#ffffff",
     "text-error":            "#da1e28",
-    # Link
     "link-primary":          "#0f62fe",
     "link-primary-hover":    "#0043ce",
     "link-secondary":        "#0043ce",
     "link-inverse":          "#78a9ff",
-    # Icon
     "icon-primary":          "#161616",
     "icon-secondary":        "#525252",
     "icon-inverse":          "#ffffff",
     "icon-on-color":         "#ffffff",
     "icon-disabled":         "#c6c6c6",
-    # Interactive
     "interactive":           "#0f62fe",
     "focus":                 "#0f62fe",
     "focus-inverse":         "#ffffff",
     "highlight":             "#d0e2ff",
-    # Support
     "support-error":         "#da1e28",
     "support-success":       "#198038",
     "support-warning":       "#f1c21b",
     "support-info":          "#0043ce",
     "support-error-inverse": "#fa4d56",
-    # Miscellaneous
     "overlay":               "#16161680",
     "skeleton-element":      "#e0e0e0",
     "skeleton-background":   "#e5e5e5",
@@ -122,73 +122,361 @@ FALLBACK_TYPOGRAPHY = {
 }
 
 
-def _parse_js_tokens(js_source):
-    """
-    Parse tokens from Carbon's JS theme files.
-    These export plain objects like:
-        export const white = {
-          background: '#ffffff',
-          ...
-        };
-    We extract key: '#value' pairs with a regex.
-    """
+def _fetch(url: str) -> str:
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.text
+
+
+def _format_number(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:g}"
+
+
+def _rem(px: float) -> str:
+    return f"{_format_number(px / 16)}rem"
+
+
+def _rgba(hexcode: str, alpha: float) -> str | None:
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", hexcode):
+        return None
+    r = int(hexcode[1:3], 16)
+    g = int(hexcode[3:5], 16)
+    b = int(hexcode[5:7], 16)
+    return f"rgba({r}, {g}, {b}, {_format_number(alpha)})"
+
+
+def _format_carbon_name(token: str) -> str:
+    result = ""
+    for index, ch in enumerate(token):
+        if ch.isdigit():
+            result += "-" + token[index:]
+            break
+        if ch.isupper():
+            if index > 0 and token[index - 1].isupper():
+                result += ch.lower()
+            else:
+                result += "-" + ch.lower()
+        else:
+            result += ch
+    return result
+
+
+def _infer_group(name: str) -> str:
+    for prefix in (
+        "text", "icon", "link", "border", "layer", "background", "support",
+        "interactive", "focus", "field", "overlay", "skeleton",
+    ):
+        if name.startswith(prefix):
+            return prefix
+    if name.startswith(("spacing", "fluid-spacing", "layout")):
+        return "spacing"
+    if name.startswith(("container", "size")):
+        return "layout"
+    if name.startswith(("caption", "label", "helper-text", "body", "code",
+                        "heading", "productive", "expressive", "quotation",
+                        "display", "legal", "fluid")):
+        return "typography"
+    return "misc"
+
+
+def _parse_simple_color_constants(js_source: str) -> dict[str, str]:
+    raw: dict[str, str] = {}
+    for name, expr in re.findall(r"export const (\w+)\s*=\s*([^;]+);", js_source):
+        expr = expr.strip()
+        if expr.startswith("'") and expr.endswith("'"):
+            raw[name] = expr[1:-1]
+        elif re.fullmatch(r"\w+", expr):
+            raw[name] = expr
+
+    resolved: dict[str, str] = {}
+
+    def resolve(name: str) -> str | None:
+        if name in resolved:
+            return resolved[name]
+        expr = raw.get(name)
+        if not expr:
+            return None
+        if expr.startswith("#"):
+            resolved[name] = expr
+            return expr
+        if expr == name:
+            return None
+        value = resolve(expr)
+        if value:
+            resolved[name] = value
+        return value
+
+    for name in list(raw):
+        resolve(name)
+    return resolved
+
+
+def _eval_color_expr(expr: str, env: dict[str, str]) -> str | None:
+    expr = expr.strip()
+    if expr.startswith("'") and expr.endswith("'"):
+        return expr[1:-1]
+    if re.fullmatch(r"\w+", expr):
+        return env.get(expr)
+
+    match = re.fullmatch(r"adjustAlpha\((\w+),\s*([\d.]+)\)", expr)
+    if match:
+        token, alpha = match.groups()
+        return _rgba(env.get(token, ""), float(alpha))
+
+    match = re.fullmatch(r"rgba\((\w+),\s*([\d.]+)\)", expr)
+    if match:
+        token, alpha = match.groups()
+        return _rgba(env.get(token, ""), float(alpha))
+
+    return None
+
+
+def _parse_white_theme(white_js: str, colors_js: str) -> list[dict]:
+    constants = _parse_simple_color_constants(colors_js)
+    env = dict(constants)
     tokens = []
-    # Match  tokenName: '#hexvalue'  or  tokenName: "rgba(...)"
-    pattern = re.compile(r"(\w[\w-]*):\s*'([^']+)'")
-    for match in pattern.finditer(js_source):
-        name, value = match.group(1), match.group(2)
-        if value.startswith("#") or value.startswith("rgb"):
+
+    for name, expr in re.findall(r"export const (\w+)\s*=\s*([^;]+);", white_js):
+        value = _eval_color_expr(expr, env)
+        if not value:
+            continue
+        env[name] = value
+        tokens.append({
+            "name": _format_carbon_name(name),
+            "value": value,
+            "type": "COLOR",
+            "group": _infer_group(_format_carbon_name(name)),
+        })
+    return tokens
+
+
+def _extract_layout_token_names(tokens_js: str) -> list[str]:
+    match = re.search(r"unstable_tokens\s*=\s*\[(.*?)\]", tokens_js, re.S)
+    if not match:
+        return []
+    return re.findall(r"'([^']+)'", match.group(1))
+
+
+def _eval_layout_expr(expr: str) -> str | None:
+    expr = expr.strip()
+    if expr.startswith("'") and expr.endswith("'"):
+        return expr[1:-1]
+    if re.fullmatch(r"-?\d+(\.\d+)?", expr):
+        return expr
+
+    match = re.fullmatch(r"miniUnits\(([\d.]+)\)", expr)
+    if match:
+        return _rem(8 * float(match.group(1)))
+
+    match = re.fullmatch(r"rem\(([\d.]+)\)", expr)
+    if match:
+        return _rem(float(match.group(1)))
+
+    return None
+
+
+def _parse_layout_tokens(index_js: str, tokens_js: str) -> list[dict]:
+    names = _extract_layout_token_names(tokens_js)
+    exprs = dict(re.findall(r"export const (\w+)\s*=\s*([^;]+);", index_js))
+    tokens = []
+
+    for name in names:
+        expr = exprs.get(name)
+        if not expr:
+            continue
+        value = _eval_layout_expr(expr)
+        if value is None:
+            continue
+        slug = _format_carbon_name(name)
+        tokens.append({
+            "name": slug,
+            "value": value,
+            "type": "FLOAT",
+            "group": _infer_group(slug),
+        })
+    return tokens
+
+
+def _parse_scale(scale_js: str) -> list[int]:
+    match = re.search(r"export const scale = \[(.*?)\];", scale_js, re.S)
+    if not match:
+        return []
+    return [int(num) for num in re.findall(r"\d+", match.group(1))]
+
+
+def _parse_font_weights(js: str) -> dict[str, str]:
+    body = re.search(r"fontWeights\s*=\s*\{(.*?)\}", js, re.S)
+    if not body:
+        return {}
+    return {
+        name: value
+        for name, value in re.findall(r"(\w+)\s*:\s*(\d+)", body.group(1))
+    }
+
+
+def _parse_font_families(js: str) -> dict[str, str]:
+    body = re.search(r"fontFamilies\s*=\s*\{(.*?)\n\};", js, re.S)
+    if not body:
+        return {}
+    return {
+        name: value
+        for name, value in re.findall(r'(\w+)\s*:\s*\n?\s*"([^"]+)"', body.group(1), re.S)
+    }
+
+
+def _extract_type_token_names(styles_scss: str) -> set[str]:
+    return {name for name in re.findall(r"^\$([\w-]+):", styles_scss, re.M)}
+
+
+def _extract_type_maps(styles_scss: str) -> dict[str, dict | str]:
+    entries: dict[str, dict | str] = {}
+    lines = styles_scss.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        alias = re.match(r"^\$([\w-]+):\s*\$([\w-]+)\s*!default;$", stripped)
+        if alias:
+            entries[alias.group(1)] = f"${alias.group(2)}"
+            i += 1
+            continue
+
+        start = re.match(r"^\$([\w-]+):\s*\($", stripped)
+        if not start:
+            i += 1
+            continue
+
+        name = start.group(1)
+        i += 1
+        props: dict[str, str] = {}
+        while i < len(lines):
+            line = re.sub(r"\s*//.*$", "", lines[i]).strip()
+            if not line:
+                i += 1
+                continue
+            if line.startswith(")"):
+                break
+            prop = re.match(r"^([\w-]+):\s*(.+?),?$", line)
+            if prop:
+                props[prop.group(1)] = prop.group(2).strip()
+            i += 1
+        entries[name] = props
+        i += 1
+    return entries
+
+
+def _resolve_type_value(raw: str, scale: list[int], weights: dict[str, str], families: dict[str, str]) -> str | None:
+    raw = raw.strip()
+    match = re.fullmatch(r"scale\.type-scale\((\d+)\)", raw)
+    if match:
+        step = int(match.group(1))
+        if 0 < step <= len(scale):
+            return _rem(scale[step - 1])
+        return None
+
+    match = re.fullmatch(r"font-family\.font-weight\('([\w-]+)'\)", raw)
+    if match:
+        return weights.get(match.group(1))
+
+    match = re.fullmatch(r"font-family\.font-family\('([\w-]+)'\)", raw)
+    if match:
+        return families.get(match.group(1))
+
+    if raw.startswith("'") and raw.endswith("'"):
+        return raw[1:-1]
+    if re.fullmatch(r"-?\d+(\.\d+)?(px)?", raw):
+        return raw
+    return None
+
+
+def _parse_typography_tokens(styles_scss: str, scale_js: str, font_weight_js: str, font_family_js: str) -> list[dict]:
+    scale = _parse_scale(scale_js)
+    weights = _parse_font_weights(font_weight_js)
+    families = _parse_font_families(font_family_js)
+    entries = _extract_type_maps(styles_scss)
+    token_names = _extract_type_token_names(styles_scss)
+
+    resolved_maps: dict[str, dict[str, str]] = {}
+
+    def resolve(name: str) -> dict[str, str]:
+        if name in resolved_maps:
+            return resolved_maps[name]
+        raw = entries.get(name)
+        if raw is None:
+            return {}
+        if isinstance(raw, str) and raw.startswith("$"):
+            resolved = dict(resolve(raw[1:]))
+            resolved_maps[name] = resolved
+            return resolved
+
+        resolved: dict[str, str] = {}
+        for prop, value in raw.items():
+            parsed = _resolve_type_value(value, scale, weights, families)
+            if parsed is not None:
+                resolved[prop] = parsed
+        resolved_maps[name] = resolved
+        return resolved
+
+    tokens = []
+    for name in sorted(token_names):
+        props = resolve(name)
+        for prop, value in props.items():
+            token_name = f"{name}-{prop}"
             tokens.append({
-                "name":  name,
+                "name": token_name,
                 "value": value,
-                "type":  "COLOR",
-                "group": _infer_group(name),
+                "type": "STRING" if prop == "font-family" else "FLOAT",
+                "group": "typography",
             })
     return tokens
 
 
-def _infer_group(name):
-    for prefix in ("text", "icon", "link", "border", "layer", "background",
-                   "support", "interactive", "focus", "field", "overlay"):
-        if name.startswith(prefix):
-            return prefix
-    return "misc"
-
-
-def _try_github_fetch():
-    """Fetch and parse Carbon token JS files from GitHub."""
-    tokens = []
-    for theme, url in THEME_FILES.items():
-        try:
-            resp = requests.get(url, timeout=TIMEOUT)
-            resp.raise_for_status()
-            parsed = _parse_js_tokens(resp.text)
-            if parsed:
-                tokens = parsed  # use first successful theme
-                break
-        except Exception:
-            continue
-    return tokens
-
-
 def scrape():
-    """Return normalised Carbon token list."""
-    tokens = _try_github_fetch()
+    """Return normalized Carbon token list."""
+    tokens: dict[str, dict] = {}
+    source_parts = []
 
-    source = "carbon-design-system/carbon (GitHub)"
-    if not tokens:
-        source = "curated fallback (GitHub unavailable)"
+    try:
+        color_tokens = _parse_white_theme(_fetch(WHITE_THEME_URL), _fetch(COLORS_JS_URL))
+        for token in color_tokens:
+            tokens[token["name"]] = token
+        if color_tokens:
+            source_parts.append("white-theme colors (GitHub)")
+    except Exception:
         for name, value in FALLBACK_COLORS.items():
-            tokens.append({"name": name, "value": value, "type": "COLOR", "group": _infer_group(name)})
+            tokens[name] = {"name": name, "value": value, "type": "COLOR", "group": _infer_group(name)}
+        source_parts.append("fallback colors")
+
+    try:
+        layout_tokens = _parse_layout_tokens(_fetch(LAYOUT_INDEX_URL), _fetch(LAYOUT_TOKENS_URL))
+        for token in layout_tokens:
+            tokens[token["name"]] = token
+        if layout_tokens:
+            source_parts.append("layout tokens (GitHub)")
+    except Exception:
         for name, value in FALLBACK_SPACING.items():
-            tokens.append({"name": name, "value": value, "type": "FLOAT", "group": "spacing"})
+            tokens[name] = {"name": name, "value": value, "type": "FLOAT", "group": "spacing"}
+        source_parts.append("fallback spacing")
+
+    try:
+        type_tokens = _parse_typography_tokens(
+            _fetch(TYPE_STYLES_URL),
+            _fetch(TYPE_SCALE_URL),
+            _fetch(TYPE_FONT_WEIGHT_URL),
+            _fetch(TYPE_FONT_FAMILY_URL),
+        )
+        for token in type_tokens:
+            tokens[token["name"]] = token
+        if type_tokens:
+            source_parts.append("type tokens (GitHub)")
+    except Exception:
         for name, value in FALLBACK_TYPOGRAPHY.items():
-            tokens.append({"name": name, "value": value, "type": "FLOAT", "group": "typography"})
+            tokens[name] = {"name": name, "value": value, "type": "FLOAT", "group": "typography"}
+        source_parts.append("fallback typography")
 
     return {
         "system":  "Carbon Design System",
         "slug":    "carbon",
         "version": "white-theme",
-        "source":  source,
-        "tokens":  tokens,
+        "source":  ", ".join(source_parts),
+        "tokens":  sorted(tokens.values(), key=lambda token: token["name"]),
     }
