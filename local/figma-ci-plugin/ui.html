@@ -273,7 +273,7 @@
   const FLOW_ACCOUNT       = 'ai-figma-design-review-gitlab-ai-hackathon';
   const DESIGN_TOKENS_API  = 'https://design-tokens-api-sdzot2fiaq-uc.a.run.app';
   const DEFAULT_SAVE_FOLDER = 'demo';
-  const ROOT_FOLDER_MARKER  = '__ROOT__';
+  const REVIEW_OUTPUT_FOLDER = 'demo';
   const FIX_POLL_INTERVAL_MS = 15000;
   const FIX_INPUT_DEBOUNCE_MS = 700;
 
@@ -340,12 +340,12 @@
     return saveFolder ? `${saveFolder}/${fileName}` : fileName;
   }
 
-  function getFixSpecPath(saveFolder) {
-    return buildRepoPath(saveFolder, 'figma-fix-spec.json');
+  function getReviewOutputPath(fileName) {
+    return `${REVIEW_OUTPUT_FOLDER}/${fileName}`;
   }
 
-  function getSaveFolderMarker(saveFolder) {
-    return saveFolder || ROOT_FOLDER_MARKER;
+  function getFixSpecPath() {
+    return getReviewOutputPath('figma-fix-spec.json');
   }
 
   function getSubmitValues() {
@@ -612,7 +612,9 @@
       setStatus('submitStatus', '🤖 Triggering review flow…');
       await fetch(`${api}/projects/${project.id}/merge_requests/${mr.iid}/notes`, {
         method: 'POST', headers: h,
-        body: JSON.stringify({ body: `@${FLOW_ACCOUNT} please review this design update.` }),
+        body: JSON.stringify({
+          body: `@${FLOW_ACCOUNT} please review this design update and save outputs to <SAVE_FOLDER>${v.saveFolder}`,
+        }),
       });
 
       setStatusHTML('submitStatus',
@@ -657,10 +659,9 @@
 
   function getFixLookupValues() {
     return {
-      branch:     document.getElementById('reviewBranch').value.trim(),
-      token:      document.getElementById('token').value.trim(),
-      project:    document.getElementById('projectPath').value.trim(),
-      saveFolder: getSaveFolderValue(),
+      branch:  document.getElementById('reviewBranch').value.trim(),
+      token:   document.getElementById('token').value.trim(),
+      project: document.getElementById('projectPath').value.trim(),
     };
   }
 
@@ -706,7 +707,7 @@
       }
       const proj = await projRes.json();
 
-      const filePath = encodeURIComponent(getFixSpecPath(values.saveFolder));
+      const filePath = encodeURIComponent(getFixSpecPath());
       const specRes = await fetch(
         `${api}/projects/${proj.id}/repository/files/${filePath}?ref=${encodeURIComponent(values.branch)}`,
         { headers: h }
@@ -807,7 +808,7 @@
       if (!projRes.ok) throw new Error(`Project not found (${projRes.status})`);
       const proj = await projRes.json();
 
-      const filePath = encodeURIComponent(getFixSpecPath(values.saveFolder));
+      const filePath = encodeURIComponent(getFixSpecPath());
       const specRes  = await fetch(
         `${api}/projects/${proj.id}/repository/files/${filePath}?ref=${encodeURIComponent(branch)}`,
         { headers: h }

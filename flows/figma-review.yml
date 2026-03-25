@@ -36,27 +36,14 @@ definition:
         - on_agent_final_answer
         - on_tool_execution_success
 
-    - name: "ds_catalog_agent"
-      type: AgentComponent
-      prompt_id: "ds_catalog_prompt"
-      inputs:
-        - "context:goal"
-        - "context:project_id"
-      toolset:
-        - get_merge_request
-        - list_repository_tree
-        - get_repository_file
-        - create_commit
-      ui_log_events:
-        - on_agent_final_answer
-        - on_tool_execution_success
-
     - name: "component_classifier"
       type: AgentComponent
       prompt_id: "component_classifier_prompt"
       inputs:
         - "context:goal"
         - "context:project_id"
+        - "context:intake.final_answer.snapshot_save_folder"
+        - "context:intake.final_answer.mr_save_folder"
       toolset:
         - get_merge_request
         - list_repository_tree
@@ -72,6 +59,8 @@ definition:
       inputs:
         - "context:goal"
         - "context:project_id"
+        - "context:intake.final_answer.snapshot_save_folder"
+        - "context:intake.final_answer.mr_save_folder"
       toolset:
         - get_merge_request
         - list_repository_tree
@@ -87,6 +76,8 @@ definition:
       inputs:
         - "context:goal"
         - "context:project_id"
+        - "context:intake.final_answer.snapshot_save_folder"
+        - "context:intake.final_answer.mr_save_folder"
       toolset:
         - get_merge_request
         - get_repository_file
@@ -97,8 +88,6 @@ definition:
 
   routers:
     - from: "intake"
-      to: "ds_catalog_agent"
-    - from: "ds_catalog_agent"
       to: "component_classifier"
     - from: "component_classifier"
       to: "component_patch_planner"
@@ -127,8 +116,21 @@ definition:
           Step 2: Call get_merge_request (project_id, merge_request_iid).
             Confirm the MR exists. Note source_branch and merge request description.
 
-          Step 3: Call create_merge_request_note with body:
+          Step 3: Resolve two debug fields:
+            - snapshot_save_folder:
+              find the Snapshot row in the MR description:
+              `| **Snapshot** | \`<path>\` |`
+              use the parent directory of that path,
+              or "" if the row is missing or the path has no "/".
+            - mr_save_folder:
+              find `<SAVE_FOLDER><value>` in the goal text,
+              and use `<value>` exactly, or "" if the marker is missing.
+
+          Step 4: Call create_merge_request_note with body:
             "⏳ Design system migration analysis started…"
+
+          Step 5: Output a final answer as raw JSON, with no markdown fence:
+            {"status":"started","source_branch":"<source_branch>","snapshot_save_folder":"<snapshot_save_folder>","mr_save_folder":"<mr_save_folder>"}
 
           Do NOT ask the user for anything.
         user: |
@@ -140,78 +142,12 @@ definition:
         timeout: 60
 
     # ──────────────────────────────────────────────────────────────────────────
-    # 2. DS CATALOG AGENT
-    #    The Figma plugin already fetched the design system catalog from the
-    #    Cloud Function (GCS-backed) and committed it in the save folder noted
-    #    in the MR description. This agent just verifies the file is present
-    #    and logs what was found.
-    # ──────────────────────────────────────────────────────────────────────────
-    - prompt_id: "ds_catalog_prompt"
-      name: "Design System Catalog Agent"
-      prompt_template:
-        system: |
-          You are the Design System Catalog Agent for the Design System Migration pipeline.
-
-          The Figma plugin has already fetched the design system catalog from the
-          Design Tokens API (backed by GCS) and committed it to ds-catalog.json
-          on this branch — in the same commit as the Figma export.
-          Your job is to verify the file is present and log what was found.
-
-          ── STEPS ──────────────────────────────────────────────────────────────
-
-          Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch and merge request description, and find `<!-- FIGMA_SAVE_FOLDER: <value> -->`.
-            If value is "__ROOT__" or the marker is missing, use the repository root.
-            Otherwise use the value exactly as the save folder.
-            Build a helper mentally:
-              repo_path(file) = save_folder ? save_folder + "/" + file : file
-
-          Step 2: Call get_repository_file (project_id, repo_path("ds-catalog.json"),
-            ref=source_branch). Base64-decode.
-
-            Case A — File exists AND components array is non-empty:
-              Log: "✅ Catalog ready: <len(components)> components and <len(tokens)> tokens for <design_system_name>"
-              No further action. Proceed to the next agent.
-
-            Case B — File exists, components array is empty, BUT tokens array is non-empty:
-              Log: "✅ Token-only catalog ready: <len(tokens)> tokens for <design_system_name>"
-              No further action. The classifier will use token inference mode.
-
-            Case C — File exists BUT both components and tokens arrays are empty:
-              Log the warning field from the file.
-              No further action. The classifier will use built-in rules.
-
-            Case D — File does not exist:
-              Call create_commit:
-                branch: source_branch
-                commit_message: "chore: ds component catalog fallback [skip ci]"
-                actions:
-                  - action: "create"
-                    file_path: repo_path("ds-catalog.json")
-                    content: {
-                      "design_system_name": null,
-                      "slug": null,
-                      "components": [],
-                      "tokens": [],
-                      "warning": "Figma plugin did not commit the catalog. The classifier will use built-in rules."
-                    }
-
-          Do NOT call any external API. The catalog is committed by the Figma plugin.
-        user: |
-          Project ID: {{project_id}}
-          Goal: {{goal}}
-        placeholder: history
-      unit_primitives: []
-      params:
-        timeout: 60
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # 3. COMPONENT CLASSIFIER
+    # 2. COMPONENT CLASSIFIER
     #    This is the core agent. It reads every node in the Figma export and
     #    determines:
     #      (a) What semantic component type this node IS
     #      (b) Which component in the target DS best matches it
-    #    Then writes a component-migration-plan.json in the same save folder.
+    #    Then writes demo/component-migration-plan.json.
     # ──────────────────────────────────────────────────────────────────────────
     - prompt_id: "component_classifier_prompt"
       name: "Component Classifier"
@@ -363,23 +299,23 @@ definition:
           ── STEPS ───────────────────────────────────────────────────────────────
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch and merge request description, and find `<!-- FIGMA_SAVE_FOLDER: <value> -->`.
-            If value is "__ROOT__" or the marker is missing, use the repository root.
-            Otherwise use the value exactly as the save folder.
-            Build a helper mentally:
-              repo_path(file) = save_folder ? save_folder + "/" + file : file
+            Note source_branch.
+            Read the debug context values from the user prompt:
+              - snapshot_save_folder
+              - mr_save_folder
+            Build these debug paths mentally:
+              - snapshot_debug_output_path = snapshot_save_folder ? snapshot_save_folder + "/component-migration-plan.json" : "component-migration-plan.json"
+              - mr_debug_output_path = mr_save_folder ? mr_save_folder + "/component-migration-plan.json" : "component-migration-plan.json"
+            Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
 
           Step 2: Read ds-catalog.json:
-            Call get_repository_file (project_id, repo_path("ds-catalog.json"), ref=source_branch).
+            Call get_repository_file (project_id, "demo/ds-catalog.json", ref=source_branch).
             Base64-decode. This gives you the available target-DS components and tokens.
 
           Step 3: Find and read the Figma export:
-            Call list_repository_tree:
-              - if save_folder is non-empty: path=save_folder
-              - if save_folder is root: do not pass a path filter
+            Call list_repository_tree (project_id, ref=source_branch, path="demo").
             From the returned files, find the newest file whose basename matches
-            "figma-export-*.json".
-            Call get_repository_file for that file path.
+            "figma-export-*.json", then call get_repository_file for that file path.
             Base64-decode. Read the "nodes" array.
 
           Step 4: Traverse ALL nodes recursively.
@@ -415,7 +351,7 @@ definition:
               commit_message: "chore: component migration plan [skip ci]"
               actions:
                 - action: "create"
-                  file_path: repo_path("component-migration-plan.json")
+                  file_path: "demo/component-migration-plan.json"
                   content: <JSON string>
 
           component-migration-plan.json must match this schema:
@@ -464,16 +400,24 @@ definition:
             "low"    — best guess from partial signals; include but flag
 
           Be exhaustive. Check EVERY node. Leave no untreated raw shapes.
+          In your final answer, include these exact debug lines:
+            snapshot_save_folder:<value from user prompt>
+            mr_save_folder:<value from user prompt>
+            snapshot_debug_output_path:<computed path>
+            mr_debug_output_path:<computed path>
+            actual_output_path:demo/component-migration-plan.json
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
+          Snapshot Save Folder Context: {{snapshot_save_folder}}
+          MR Save Folder Context: {{mr_save_folder}}
         placeholder: history
       unit_primitives: []
       params:
         timeout: 300
 
     # ──────────────────────────────────────────────────────────────────────────
-    # 4. COMPONENT PATCH PLANNER
+    # 3. COMPONENT PATCH PLANNER
     #    Expands matched DS components into normalized property patches and
     #    writes the patch plan consumed by the migration writer.
     #    Reads only migration-plan.json + ds-catalog.json — no figma export.
@@ -488,11 +432,11 @@ definition:
           property-level Figma patches grouped by node.
 
           You have everything you need in two files:
-            - component-migration-plan.json in the resolved save folder
+            - demo/component-migration-plan.json
               (has node IDs, current_properties,
               child_text_node_id, child_icon_node_id, target_component_id, target_mode,
               inferred_tokens)
-            - ds-catalog.json in the resolved save folder
+            - demo/ds-catalog.json
               (has DS token specs per component and token list)
 
           Do NOT read the Figma export. All current property values are already
@@ -546,16 +490,19 @@ definition:
           ── STEPS ──────────────────────────────────────────────────────────────
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch and merge request description, and find `<!-- FIGMA_SAVE_FOLDER: <value> -->`.
-            If value is "__ROOT__" or the marker is missing, use the repository root.
-            Otherwise use the value exactly as the save folder.
-            Build a helper mentally:
-              repo_path(file) = save_folder ? save_folder + "/" + file : file
+            Note source_branch.
+            Read the debug context values from the user prompt:
+              - snapshot_save_folder
+              - mr_save_folder
+            Build these debug paths mentally:
+              - snapshot_debug_output_path = snapshot_save_folder ? snapshot_save_folder + "/component-patch-plan.json" : "component-patch-plan.json"
+              - mr_debug_output_path = mr_save_folder ? mr_save_folder + "/component-patch-plan.json" : "component-patch-plan.json"
+            Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
 
-          Step 2: Read repo_path("component-migration-plan.json").
+          Step 2: Read "demo/component-migration-plan.json".
             Base64-decode and read the migrations array.
 
-          Step 3: Read repo_path("ds-catalog.json").
+          Step 3: Read "demo/ds-catalog.json".
             Base64-decode and read the components array and tokens array.
 
           Step 4: For each migration:
@@ -572,12 +519,12 @@ definition:
               - build conservative patches from those inferred tokens only
               - skip layout properties such as width, height, padding, itemSpacing
 
-          Step 5: Commit repo_path("component-patch-plan.json"):
+          Step 5: Commit "demo/component-patch-plan.json":
             create_commit with branch=source_branch,
             commit_message: "chore: component patch plan [skip ci]"
             actions:
               - action: "create"
-                file_path: repo_path("component-patch-plan.json")
+                file_path: "demo/component-patch-plan.json"
                 content: <JSON string>
 
           Output JSON must match this schema:
@@ -612,16 +559,24 @@ definition:
               }
             ]
           }
+          In your final answer, include these exact debug lines:
+            snapshot_save_folder:<value from user prompt>
+            mr_save_folder:<value from user prompt>
+            snapshot_debug_output_path:<computed path>
+            mr_debug_output_path:<computed path>
+            actual_output_path:demo/component-patch-plan.json
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
+          Snapshot Save Folder Context: {{snapshot_save_folder}}
+          MR Save Folder Context: {{mr_save_folder}}
         placeholder: history
       unit_primitives: []
       params:
         timeout: 300
 
     # ──────────────────────────────────────────────────────────────────────────
-    # 5. MIGRATION WRITER
+    # 4. MIGRATION WRITER
     #    Reads the component patch plan, generates the machine-readable fix spec
     #    for the Figma plugin, and posts the human-readable MR summary comment.
     # ──────────────────────────────────────────────────────────────────────────
@@ -632,13 +587,16 @@ definition:
           You are the Migration Writer for the Design System Migration pipeline.
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch and merge request description, and find `<!-- FIGMA_SAVE_FOLDER: <value> -->`.
-            If value is "__ROOT__" or the marker is missing, use the repository root.
-            Otherwise use the value exactly as the save folder.
-            Build a helper mentally:
-              repo_path(file) = save_folder ? save_folder + "/" + file : file
+            Note source_branch.
+            Read the debug context values from the user prompt:
+              - snapshot_save_folder
+              - mr_save_folder
+            Build these debug paths mentally:
+              - snapshot_debug_output_path = snapshot_save_folder ? snapshot_save_folder + "/figma-fix-spec.json" : "figma-fix-spec.json"
+              - mr_debug_output_path = mr_save_folder ? mr_save_folder + "/figma-fix-spec.json" : "figma-fix-spec.json"
+            Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
 
-          Step 2: Call get_repository_file for repo_path("component-patch-plan.json").
+          Step 2: Call get_repository_file for "demo/component-patch-plan.json".
             Base64-decode. Read the patch_sets array and summary.
 
           Step 3: Build the Figma Fix Spec — grouped by node (pass patch_sets through directly):
@@ -678,7 +636,7 @@ definition:
             commit_message: "chore: figma fix spec [skip ci]"
             actions:
               - action: "create"
-                file_path: repo_path("figma-fix-spec.json")
+                file_path: "demo/figma-fix-spec.json"
                 content: <JSON string from step 3>
 
           Step 5: Post the MR comment using create_merge_request_note.
@@ -710,9 +668,17 @@ definition:
 
           If there is nothing to migrate, post:
           "✅ No property patches were needed. The exported design already matches the target design system closely enough."
+          In your final answer, include these exact debug lines:
+            snapshot_save_folder:<value from user prompt>
+            mr_save_folder:<value from user prompt>
+            snapshot_debug_output_path:<computed path>
+            mr_debug_output_path:<computed path>
+            actual_output_path:demo/figma-fix-spec.json
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
+          Snapshot Save Folder Context: {{snapshot_save_folder}}
+          MR Save Folder Context: {{mr_save_folder}}
         placeholder: history
       unit_primitives: []
       params:
