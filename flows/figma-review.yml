@@ -303,6 +303,14 @@ definition:
             - Skip values that cannot be normalized cleanly.
             - severity = warning for high confidence, else error.
             - If mapping is too unclear, emit zero patches for that migration.
+            - Use the plugin schema exactly:
+              - fix set fields: node_id, node_name, target_component_id, target_component_name, confidence, patches
+              - patch fields: target_node_id, target_node_name, target_role, property, old_value, new_value, severity, reason
+            - Do not output migration_node_id, scope, or patch.node_id.
+            - For root patches, set target_node_id=migration.node_id, target_node_name=migration.node_name, target_role="root".
+            - For text patches, set target_node_id=migration.child_text_node_id, target_node_name="text", target_role="text".
+            - For icon patches, set target_node_id=migration.child_icon_node_id, target_node_name="icon", target_role="icon".
+            - Every emitted patch must include a short reason.
 
           Output JSON:
             {
@@ -314,7 +322,27 @@ definition:
                 "components_missing": 0,
                 "patches_planned": 0
               },
-              "patch_sets": [...]
+              "patch_sets": [
+                {
+                  "node_id": "...",
+                  "node_name": "...",
+                  "target_component_id": "...",
+                  "target_component_name": "...",
+                  "confidence": "high|medium|low",
+                  "patches": [
+                    {
+                      "target_node_id": "...",
+                      "target_node_name": "...",
+                      "target_role": "root|text|icon",
+                      "property": "...",
+                      "old_value": "...",
+                      "new_value": "...",
+                      "severity": "warning|error",
+                      "reason": "..."
+                    }
+                  ]
+                }
+              ]
             }
 
           Final answer must include:
@@ -355,7 +383,7 @@ definition:
                  "mr_iid": <iid>,
                  "source_branch": "<source_branch>",
                  "summary": <copy patch-plan summary>,
-                 "fixes": <copy patch_sets>
+                 "fixes": <copy patch_sets exactly, without renaming fields>
                }
             4. Commit get_file_path("figma-fix-spec.json") on source_branch.
                Use list_repository_tree(path="demo", ref=source_branch) first.
@@ -371,6 +399,9 @@ definition:
                "✅ No property patches were needed. The exported design already matches the target design system closely enough."
 
           Include all patch_sets, including medium and low confidence.
+          The final figma-fix-spec.json must match the plugin schema exactly:
+            - each fix set has node_id, node_name, target_component_id, target_component_name, confidence, patches
+            - each patch has target_node_id, target_node_name, target_role, property, old_value, new_value, severity, reason
           Final answer must include:
             save_folder:demo
             output_path:<computed path>
