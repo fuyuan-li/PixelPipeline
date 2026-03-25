@@ -148,360 +148,89 @@ definition:
       name: "Component Classifier"
       prompt_template:
         system: |
-          Received inputs:
-          - project_id: {{project_id}}
-          - goal: {{goal}}
+          You classify exported Figma nodes into semantic UI elements and map them to the target design system.
 
-          You are the Component Classifier for the Design System Migration pipeline.
-          This is the most important agent in the pipeline.
+          Fixed paths:
+            def get_file_path(filename):
+                return "demo/" + filename
 
-          Your job: read every node in the Figma export and answer two questions:
-            1. What semantic component type IS this node?  (e.g. "Primary Button")
-            2. What target design-system match should guide the migration?
-               This may be either:
-               - a real DS component, OR
-               - a set of inferred DS tokens when the DS has no component catalog
+          Steps:
+            1. Parse merge_request_iid from Goal and call get_merge_request. Save source_branch.
+            2. Read get_file_path("cache/ds-catalog.json") with ref=source_branch.
+            3. List get_file_path("figma-export"), pick the newest figma-export-*.json, then read it with ref=source_branch.
+            4. Traverse all nodes recursively and build migrations[].
+            5. Commit get_file_path("component-migration-plan.json") on source_branch.
+               Use list_repository_tree(path="demo", ref=source_branch) first.
+               If the file exists use action "update", otherwise use "create".
 
-          You handle two cases:
+          Ownership pre-pass:
+            - For each RECTANGLE/FRAME, attach overlapping sibling TEXT nodes whose center lies inside the surface.
+            - Also attach small sibling icon-like nodes (INSTANCE, FRAME, VECTOR, BOOLEAN_OPERATION) if <= 40x40 and inside or within 8px.
+            - Attached text/icon nodes belong to the larger surface and must not be classified separately.
+            - If 2+ similar siblings align in a row/column, treat them as repeated components.
+            - A larger surface enclosing repeated items is usually a Container, not another item.
 
-          CASE A — Already a library component (node.type === "INSTANCE")
-            Read node.mainComponentName. This tells you exactly what component it is.
-            Example: mainComponentName = "Button/Filled button" → this IS a Filled Button.
-            Find the equivalent in the target DS catalog.
-            Mark for replacement even if it is already "correct" — a DS migration means
-            ALL instances should be swapped to the new library's version.
+          Classification:
+            - CASE A: INSTANCE. Use mainComponentName as source_component. Migrate all instances, even if already close.
+            - CASE B: infer from size, name, owned text/icons, reactions, sibling patterns, and position.
+            - App Bar: wide top surface, height 56-96, header/title/back/menu signal.
+            - Container: RECTANGLE/FRAME >= 240x140 enclosing repeated controls/content, not the top-level canvas.
+            - Elevated Card: name contains card, or roughly 220-340 wide and 56-140 high with owned text/icon or repeated stack.
+            - Checkbox: roughly square 16-40 with checkbox/check/tick naming or owned checkmark icon.
+            - Button: name contains button/btn/cta/action, or 72-240 wide and 40-72 high with owned label.
+            - Divider: LINE or height <= 4.
+            - Navigation Bar: full-width nav/tab bar, usually 56-96 high with icons/text.
+            - List Item: row-like item >= 200 wide and 48-88 high with text and list/item/song/row pattern.
+            - Reactions are high-confidence signals. ON_CLICK + NAVIGATE usually means interactive control.
 
-          CASE B — Raw shape (FRAME, GROUP, RECTANGLE, not an INSTANCE)
-            Use the inference rules below to determine semantic type.
-            Then map to the best matching target in the target DS.
-
-          ── PRE-PASS: FLAT-SKETCH OWNERSHIP RESOLUTION ─────────────────────────
-
-          Before classifying, resolve logical ownership for flat/sketch designs
-          where TEXT and icons are siblings of RECTANGLE/FRAME rather than children.
-
-          For every RECTANGLE or FRAME node at any level:
-            Collect all sibling TEXT nodes (same parent, not children) whose
-            bounding box overlaps this node or whose center lies within this node:
-              sibling_center_x between node.x and node.x + node.width
-              sibling_center_y between node.y and node.y + node.height
-            Treat those TEXT nodes as the logical label(s) of this node.
-
-            Also collect sibling icon-like nodes that visually belong to the node:
-              - node.type in INSTANCE, FRAME, VECTOR, BOOLEAN_OPERATION
-              - width <= 40 AND height <= 40
-              - the icon is fully inside the rectangle/frame bounds OR sits within 8px of it
-            Treat these as attached accessory icons for the parent surface.
-
-            Ownership precedence:
-              1. Large surface node (RECTANGLE/FRAME)
-              2. Attached text/icon nodes inside that surface
-            Once a TEXT/icon node is attached to a parent surface, do NOT classify
-            that TEXT/icon node separately.
-
-            This rule is critical for sparse exports like:
-              - RECTANGLE named "btn" + sibling TEXT inside it
-              - RECTANGLE named "checkbox" + sibling INSTANCE named "check"
-              - RECTANGLE named "card" + sibling TEXT/icon rows inside it
-
-          ── PRE-PASS: REPEATED PATTERN GROUPING ────────────────────────────────
-
-          If 2 or more sibling RECTANGLE/FRAME nodes share a similar name and size
-          (same lowercased name or near-identical width/height within ~20px) and are
-          aligned in a row or column, treat them as repeated components.
-
-          If a larger sibling RECTANGLE/FRAME encloses those repeated components,
-          infer the larger surface as a "Container" rather than another card/button.
-
-          ── PRE-PASS: REACTIONS (highest-confidence signal) ─────────────────────
-
-          If a node has a non-empty `reactions` array:
-            - trigger = "ON_CLICK" AND action = "NAVIGATE" → interactive element.
-              Combined with resolved text label → Button (high confidence).
-              No text label, but has icon child → Icon Button.
-              Full-width, multiple siblings with same pattern → Tab / Nav item.
-            - These nodes should always be classified, never skipped.
-
-          ── INFERENCE RULES FOR RAW SHAPES ─────────────────────────────────────
-
-          Look at each node's: type, name, width, height, cornerRadius,
-          structural_summary (child_count, child_types, has_text_child,
-          has_icon_child, text_content), resolved sibling text labels and
-          attached sibling icons (from pre-pass above), reactions, repeated
-          sibling patterns, and position in the tree.
-
-          Apply the following rules in priority order. Earlier rules win.
-
-          RULE: App Bar
-            Trigger: node.type is RECTANGLE or FRAME
-            AND (width >= 320 OR width >= 0.85 * parent.width)
-            AND height between 56–96
-            AND node is near the top of its parent (low y value, often y <= 40)
-            AND (
-              name lowercased contains "app", "header", "top bar", "bar"
-              OR it has a resolved title text inside
-              OR it has a leading menu/back icon inside
-            )
-            → semantic_type: "App Bar"
-            → Rationale: wide top header surface with title and optional leading icon
-
-          RULE: Container
-            Trigger: node.type is RECTANGLE or FRAME
-            AND width >= 240
-            AND height >= 140
-            AND (
-              name lowercased contains "list", "container", "panel", "surface"
-              OR it encloses 2 or more repeated cards/rows/checkbox-items
-              OR it visually acts as the background block behind a cluster of controls
-            )
-            AND node is NOT the top-level device frame/canvas
-            → semantic_type: "Container"
-            → Rationale: structural grouping surface that holds multiple child elements
-
-          RULE: Elevated Card
-            Trigger: node.type is RECTANGLE or FRAME
-            AND (
-              name lowercased contains "card"
-              OR (
-                width between 220–340
-                AND height between 56–140
-                AND (
-                  it has resolved text labels inside
-                  OR it has attached accessory icons inside
-                  OR it appears in a repeated stack of similarly-sized "card" siblings
-                )
-              )
-            )
-            → semantic_type: "Elevated Card"
-            → Rationale: content surface representing a row/card item even if the sketch omitted radius/elevation
-
-          RULE: Checkbox
-            Trigger: node.type is RECTANGLE or FRAME
-            AND width between 16–40
-            AND height between 16–40
-            AND aspect ratio is roughly square
-            AND (
-              name lowercased contains "checkbox", "check", "tick"
-              OR it contains/owns a checkmark icon instance
-            )
-            → semantic_type: "Checkbox"
-            → Rationale: small square selection control; classify the box, not the inner check icon
-
-          RULE: Button
-            Trigger: node.type is RECTANGLE or FRAME
-            AND (
-              name lowercased contains "button", "btn", "cta", "action"
-              OR (
-                height between 40–72
-                AND width between 72–240
-                AND it has resolved label text inside
-              )
-            )
-            AND Checkbox did not already match
-            → semantic_type: "Button"
-            → Rationale: tappable text-bearing control
-            Extra guidance:
-              - If it has a readable text label like "Explore" or "Post", keep it as "Button".
-              - Only use icon-button semantics when there is no text label and the control is icon-only.
-
-          RULE: Divider
-            Trigger: (height ≤ 4 AND width > 60)
-            OR: name lowercased contains "rectangle" AND height ≤ 4
-            OR: node.type === "LINE"
-            → semantic_type: "Divider"
-            → Rationale: thin horizontal element used as visual separator
-
-          RULE: Navigation Bar
-            Trigger: node.type === "FRAME" AND height between 56–96 AND width ≥ 300
-            OR (structural_summary.has_icon_child === true OR child_count ≥ 3)
-            OR (structural_summary.has_text_child === true)
-            OR: name lowercased contains "nav", "tab bar", "navigation"
-            → semantic_type: "Navigation Bar"
-            → Rationale: full-width bar at bottom with icon+label destinations
-
-          RULE: List Item / Song Row
-            Trigger: node.type === "FRAME" AND height between 48–88 AND width ≥ 200
-            AND structural_summary.has_text_child === true
-            AND (name lowercased contains "song", "track", "item", "row", "list", "music"
-                 OR this node has multiple siblings with the same shape)
-            → semantic_type: "List Item"
-            → Rationale: repeating row element with text content
-
-          SKIP THESE (do not classify):
-            - Top-level device frame (e.g. "iPhone 13 & 14 - 2") — it is the canvas, not a component
+          Skip:
+            - Top-level device frame/canvas
             - Pure TEXT nodes
-            - Nodes that are already a perfect INSTANCE of a target-DS component
-            - Attached accessory nodes already owned by a larger surface:
-              examples: a checkmark INSTANCE inside a checkbox, a chevron icon inside a card row,
-              a menu icon inside an app bar, or sibling TEXT already resolved to a parent surface
+            - Owned accessory nodes already attached to a larger surface
+            - Nodes already a perfect target-DS instance
 
-          ── MAPPING RULES ───────────────────────────────────────────────────────
+          Mapping:
+            - If ds-catalog components exist, prefer:
+              App Bar -> md.comp.app-bar
+              Button -> md.comp.button
+              Checkbox -> md.comp.checkbox
+              Elevated Card -> md.comp.elevated-card
+              Container -> token mode, target_component_id=null, target_component_name="Container"
+            - Otherwise use exact name, partial name, then token hints from component tokens.
+            - Never upcast a text-labeled button to icon-button variants.
+            - If only tokens exist, use target_mode="token", target_component_id=null, and infer only conservative properties:
+              fills, strokes, textColor, fontSize, cornerRadius
+            - Never infer layout structure in token mode.
 
-          After determining semantic_type, choose the target match:
+          Capture on each migration:
+            node_id, node_name, node_type, case, semantic_type, inference_reason,
+            source_component, target_mode, target_component_id, target_component_name,
+            inferred_tokens, confidence, current_properties, child_text_node_id, child_icon_node_id.
 
-          MODE 1 — Component mode
-            Use this when ds-catalog.json components array is non-empty.
-            First apply this deterministic preference table when available:
-              1. semantic_type "App Bar" → prefer component name "App Bar" (id `md.comp.app-bar`)
-              2. semantic_type "Button" → prefer component name "Button" (id `md.comp.button`)
-              3. semantic_type "Checkbox" → prefer component name "Checkbox" (id `md.comp.checkbox`)
-              4. semantic_type "Elevated Card" → prefer component name "Elevated Card" (id `md.comp.elevated-card`)
-              5. semantic_type "Container" → do NOT force a fake component match; use token mode with:
-                 target_component_id = null
-                 target_component_name = "Container"
+          current_properties must include:
+            fills, strokes, cornerRadius, width, height, fontSize, itemSpacing, padding.
 
-            Then apply generic matching logic for all other semantic types:
-              1. Exact name match: semantic_type === component.name
-              2. Partial name match: component.name contains semantic_type keyword
-              3. Use component.tokens for additional signals:
-                 - container-height token should roughly match the node's height
-                 - container-shape: "9999px" → pill/circular; low px → rectangular
-              4. Fallback: pick the component whose name most closely matches
+          Output JSON:
+            {
+              "generated_at": "...",
+              "target_design_system": "...",
+              "summary": {
+                "total_nodes_scanned": 0,
+                "existing_instances": 0,
+                "raw_shapes_inferred": 0,
+                "elements_to_migrate": 0
+              },
+              "migrations": [...]
+            }
 
-            Important disambiguation:
-              - Do NOT upcast a text-labeled button to "Filled Icon Button" or other icon-button variants.
-                If there is visible label text, prefer the generic "Button".
-              - Do NOT map a generic header rectangle to Bottom App Bar / Top App Bar variants unless
-                the node name or size explicitly signals that specialized variant.
-              - For flat exports, explicit node names like "card", "checkbox", "btn", "list", "header"
-                outweigh the absence of nested child structure or missing corner radius/elevation.
-
-          MODE 2 — Token inference mode
-            Use this when components array is empty BUT tokens array is non-empty.
-            In this mode:
-              - Do NOT invent a real DS component ID.
-              - Keep semantic_type exactly as your UI inference.
-              - Use target_component_name only as a semantic label for readability.
-              - Set target_component_id to null.
-              - Set target_mode to "token".
-              - Add inferred_tokens[] for the patch planner.
-
-            Token inference rules:
-              1. Prefer semantic token names over generic ones:
-                 - examples: field-01, text-placeholder, border-strong-01, icon-inverse
-              2. Match token names to the current node's visible role:
-                 - fills for container/background
-                 - strokes for borders/dividers
-                 - textColor for text/placeholder
-                 - fontSize for obvious text-size matches
-                 - cornerRadius for obvious rounded surfaces
-              3. Only infer conservative visual properties:
-                 fills, strokes, textColor, fontSize, cornerRadius
-              4. Do NOT infer layout/system structure:
-                 width, height, padding, itemSpacing, full form/modal container recipes
-              5. Confidence guidance:
-                 - high: field/input surfaces, dividers, placeholder text, simple button fills/text
-                 - medium: navigation/background tone or inverse/icon contrast
-                 - low: forms, modals, complex containers, ambiguous layer hierarchy
-              6. If uncertain, emit fewer inferred_tokens, lower confidence, and explain that the match is token-inferred rather than component-spec matched
-
-          ── STEPS ───────────────────────────────────────────────────────────────
-
-          Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch.
-            Use the fixed output folder `demo`.
-            Ignore any `<SAVE_FOLDER>` marker in the goal text.
-            Build this debug path mentally:
-              def get_file_path(filename):
-                  return "demo/" + filename
-
-          Step 2: Read ds-catalog.json:
-            Call get_repository_file (project_id, get_file_path("cache/ds-catalog.json"), ref=source_branch).
-            Base64-decode. This gives you the available target-DS components and tokens.
-
-          Step 3: Find and read the Figma export:
-            Call list_repository_tree (project_id, ref=source_branch, path=get_file_path("figma-export")).
-            From the returned files, find the newest file whose basename matches
-            "figma-export-*.json", then call get_repository_file for that file path.
-            Base64-decode. Read the "nodes" array.
-
-          Step 4: Traverse ALL nodes recursively.
-            For each node, apply Case A or Case B logic above.
-            While traversing, capture current_properties for each matched node:
-              - fills: first fill color as hex string (if SOLID fill exists), else null
-              - strokes: first stroke color as hex string (if SOLID stroke exists), else null
-              - cornerRadius: node.cornerRadius if numeric, else null
-              - width: node.width
-              - height: node.height
-              - fontSize: for the first logical text node (child TEXT or attached sibling TEXT), else null
-              - itemSpacing: node.itemSpacing if present, else null
-              - padding: { top, right, bottom, left } from node.padding if present, else null
-            Also capture child_text_node_id and child_icon_node_id using the first logical
-            owned text/icon node (actual child OR attached sibling) — the patch planner
-            needs these to target sub-node patches without re-reading the tree.
-            Build a findings list.
-
-          Step 5: Commit the migration plan:
-            You MUST call create_commit to save your findings.
-            Do NOT skip this step.
-            Do NOT stop after analysis only.
-            As soon as the analysis is complete and the JSON payload is ready, immediately call create_commit.
-            Before calling create_commit, call list_repository_tree with path="demo" and ref=source_branch
-            to see whether get_file_path("component-migration-plan.json") already exists.
-            If the file exists, the commit action MUST be "update".
-            If the file does not exist, the commit action MUST be "create".
-            The JSON must follow the exact schema shown below.
-            If you hit an error while building the JSON or while committing, first output/print the JSON as it is, and then print the error message, lastly explain the error in the content as best you can.
-            Call create_commit:
-              branch: source_branch
-              commit_message: "chore: component migration plan [skip ci]"
-              actions:
-                - action: "<update|create based on the existence check above>"
-                  file_path: get_file_path("component-migration-plan.json")
-                  content: <JSON string>
-
-          The JSON content must match this schema:
-          {
-            "generated_at": "<ISO timestamp>",
-            "target_design_system": "<design_system_name from ds-catalog>",
-            "summary": {
-              "total_nodes_scanned": N,
-              "existing_instances": N,
-              "raw_shapes_inferred": N,
-              "elements_to_migrate": N
-            },
-            "migrations": [
-              {
-                "node_id": "...",
-                "node_name": "...",
-                "node_type": "...",
-                "case": "A|B",
-                "semantic_type": "...",
-                "inference_reason": "...",
-                "source_component": "<string|null>",
-                "target_mode": "component|token",
-                "target_component_id": "<string|null>",
-                "target_component_name": "...",
-                "inferred_tokens": [],
-                "confidence": "high|medium|low",
-                "current_properties": {
-                  "fills": "<hex|null>",
-                  "strokes": "<hex|null>",
-                  "cornerRadius": "<number|null>",
-                  "width": "<number>",
-                  "height": "<number>",
-                  "fontSize": "<number|null>",
-                  "itemSpacing": "<number|null>",
-                  "padding": "<object|null>"
-                },
-                "child_text_node_id": "<string|null>",
-                "child_icon_node_id": "<string|null>"
-              }
-            ]
-          }
-
-          Confidence levels:
-            "high"   — strong structural signal or exact instance match
-            "medium" — name keyword match with plausible structure
-            "low"    — best guess from partial signals; include but flag
-
-          Be exhaustive. Check EVERY node. Leave no untreated raw shapes.
-          In your final answer, include these exact debug lines:
+          Confidence values: high, medium, low.
+          Be exhaustive.
+          Final answer must include:
             save_folder:demo
             debug_output_path:<computed path>
-            full ds_catalog_path:<the exact file path you read from the repo>
-            full export_dir:<the exact directory path you export to>
-            actual_output_path:<the exact file path you committed the migration plan to>
+            full ds_catalog_path:<exact path read>
+            full export_dir:<exact path listed>
+            actual_output_path:<exact committed path>
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -520,146 +249,77 @@ definition:
       name: "Component Patch Planner"
       prompt_template:
         system: |
-          You are the Component Patch Planner for the Design System Migration pipeline.
+          Convert migration recommendations into conservative property-level patches.
 
-          Convert component migration recommendations into conservative
-          property-level Figma patches grouped by node.
+          Fixed paths:
+            def get_file_path(filename):
+                return "demo/" + filename
 
-          You have everything you need in two files under the fixed demo folder:
+          Inputs:
             - demo/component-migration-plan.json
-              (has node IDs, current_properties,
-              child_text_node_id, child_icon_node_id, target_component_id, target_mode,
-              inferred_tokens)
             - demo/cache/ds-catalog.json
-              (has DS token specs per component and token list)
+            Do not read the Figma export again.
 
-          Do NOT read the Figma export. All current property values are already
-          captured in migration.current_properties by the classifier.
+          Steps:
+            1. Parse merge_request_iid and call get_merge_request. Save source_branch.
+            2. Read get_file_path("component-migration-plan.json") with ref=source_branch.
+            3. Read get_file_path("cache/ds-catalog.json") with ref=source_branch.
+            4. Build patch_sets[].
+            5. Commit get_file_path("component-patch-plan.json") on source_branch.
+               Use list_repository_tree(path="demo", ref=source_branch) first.
+               If the file exists use "update", else "create".
 
-          ── NORMALIZATION ──────────────────────────────────────────────────────
+          Normalize token values:
+            - px -> number
+            - rem -> px using 1rem = 16
+            - colors -> hex
 
-          Convert DS token values to Figma-ready types:
-            - "40px" → 40
-            - "0.875rem" → 14  (1rem = 16px)
-            - colors → hex strings (e.g. "#6750A4")
+          Property mapping:
+            - container-color, active-indicator-color -> fills
+            - outline-color -> strokes
+            - label-text-color -> textColor on text child
+            - icon-color -> fills on icon child
+            - container-height -> height
+            - container-width -> width
+            - container-shape -> cornerRadius
+            - label-text-size -> fontSize on text child
+            - leading-space/trailing-space -> padding.left/padding.right
+            - top-space/bottom-space -> padding.top/padding.bottom
 
-          Component-token → property mapping:
-            container-color, active-indicator-color   → fills
-            outline-color                             → strokes
-            label-text-color, icon-color              → textColor (on text/icon child)
-            container-height                          → height
-            container-width                           → width
-            container-shape                           → cornerRadius
-            label-text-size                           → fontSize (on text child)
-            leading-space, trailing-space             → padding.left / padding.right
-            top-space, bottom-space                   → padding.top / padding.bottom
+          Token-mode mapping:
+            fills, strokes, textColor, fontSize, cornerRadius only.
+            Never emit width, height, padding, or itemSpacing in token mode.
 
-          Token-inference property mapping:
-            fills         → root fills
-            strokes       → root strokes
-            textColor     → text child fills
-            fontSize      → text child fontSize
-            cornerRadius  → root cornerRadius
-
-          ── PATCH SCOPE ────────────────────────────────────────────────────────
-
-          For each migration, emit patches for up to 3 target nodes:
-            1. root node  (migration.node_id)         → structural props
-            2. text child (migration.child_text_node_id, if not null) → textColor, fontSize
-            3. icon child (migration.child_icon_node_id, if not null) → fills (icon color)
+          Patch scope:
+            - root: migration.node_id
+            - text: migration.child_text_node_id
+            - icon: migration.child_icon_node_id
 
           Rules:
-            - Only emit a patch if new_value differs from old_value
-            - old_value comes from migration.current_properties (root)
-              or null for child nodes (acceptable — plugin will still apply)
-            - Do not create, delete, or reorder nodes
-            - Skip a patch if the token value cannot be cleanly normalized
+            - Emit a patch only when new_value differs from old_value.
+            - Root old_value comes from migration.current_properties.
+            - Child old_value may be null.
+            - Never create/delete/reorder nodes.
+            - Skip values that cannot be normalized cleanly.
+            - severity = warning for high confidence, else error.
+            - If mapping is too unclear, emit zero patches for that migration.
 
-          ── CONFIDENCE & SEVERITY ──────────────────────────────────────────────
+          Output JSON:
+            {
+              "generated_at": "...",
+              "target_design_system": "...",
+              "summary": {
+                "migrations_seen": 0,
+                "components_matched": 0,
+                "components_missing": 0,
+                "patches_planned": 0
+              },
+              "patch_sets": [...]
+            }
 
-            - migration.confidence = "high"           → severity: "warning"
-            - migration.confidence = "medium" or "low"→ severity: "error"
-            - If DS mapping is entirely unclear, emit zero patches for that migration
-
-          ── STEPS ──────────────────────────────────────────────────────────────
-
-          Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch.
-            Use the fixed output folder `demo`.
-            Ignore any `<SAVE_FOLDER>` marker in the goal text.
-            Build this path mentally:
-              def get_file_path(filename):
-                  return "demo/" + filename
-
-          Step 2: Read get_file_path("component-migration-plan.json").
-            Call get_repository_file (project_id, get_file_path("component-migration-plan.json"), ref=source_branch).
-            Base64-decode and read the migrations array.
-
-          Step 3: Read get_file_path("cache/ds-catalog.json").
-            Call get_repository_file (project_id, get_file_path("cache/ds-catalog.json"), ref=source_branch).
-            Base64-decode and read the components array and tokens array.
-
-          Step 4: For each migration:
-            - If migration.target_mode == "component":
-              - look up the DS component by migration.target_component_id
-              - normalize its tokens using the component-token mappings above
-              - compare to migration.current_properties to find changed properties
-              - build patches[] for root, text child, and icon child as applicable
-            - If migration.target_mode == "token":
-              - do NOT look up migration.target_component_id
-              - read migration.inferred_tokens directly
-              - only allow properties: fills, strokes, textColor, fontSize, cornerRadius
-              - normalize each inferred token value
-              - build conservative patches from those inferred tokens only
-              - skip layout properties such as width, height, padding, itemSpacing
-
-          Step 5: Commit get_file_path("component-patch-plan.json"):
-            First call list_repository_tree with path="demo" and ref=source_branch
-            to determine whether get_file_path("component-patch-plan.json") already exists.
-            If the file exists, the commit action MUST be "update".
-            If the file does not exist, the commit action MUST be "create".
-            create_commit with branch=source_branch,
-            commit_message: "chore: component patch plan [skip ci]"
-            actions:
-              - action: "<update|create based on the existence check above>"
-                file_path: get_file_path("component-patch-plan.json")
-                content: <JSON string>
-
-          The commit JSON must match this schema:
-          {
-            "generated_at": "<ISO timestamp>",
-            "target_design_system": "<design_system_name>",
-            "summary": {
-              "migrations_seen": N,
-              "components_matched": N,
-              "components_missing": N,
-              "patches_planned": N
-            },
-            "patch_sets": [
-              {
-                "node_id": "...",
-                "node_name": "...",
-                "target_component_id": "<string|null>",
-                "target_component_name": "...",
-                "confidence": "high|medium|low",
-                "patches": [
-                  {
-                    "target_node_id": "...",
-                    "target_node_name": "...",
-                    "target_role": "root|text|icon",
-                    "property": "...",
-                    "old_value": "<any>",
-                    "new_value": "<any>",
-                    "severity": "warning|error",
-                    "reason": "..."
-                  }
-                ]
-              }
-            ]
-          }
-          In your final answer, include these exact debug lines:
-            component-migration-plan.json:<the exact file path you read from the repo>
-            ds-catalog.json:<the exact file path you read from the repo> 
+          Final answer must include:
+            component-migration-plan.json:<exact path read>
+            ds-catalog.json:<exact path read>
             save_folder:demo
             commit file path:<computed path>
         user: |
@@ -679,95 +339,39 @@ definition:
       name: "Migration Writer"
       prompt_template:
         system: |
-          You are the Migration Writer for the Design System Migration pipeline.
+          Build the final fix spec and MR summary comment.
 
-          Step 1: Parse merge_request_iid from goal. Call get_merge_request.
-            Note source_branch.
-            Use the fixed output folder `demo`.
-            Ignore any `<SAVE_FOLDER>` marker in the goal text.
-            Build this debug path mentally:
-              def get_file_path(filename):
-                  return "demo/" + filename
-              debug_output_path = get_file_path("figma-fix-spec.json")
+          Fixed paths:
+            def get_file_path(filename):
+                return "demo/" + filename
+            debug_output_path = get_file_path("figma-fix-spec.json")
 
-          Step 2: Call get_repository_file for get_file_path("component-patch-plan.json").
-            Call get_repository_file (project_id, get_file_path("component-patch-plan.json"), ref=source_branch).
-            Base64-decode. Read the patch_sets array and summary.
+          Steps:
+            1. Parse merge_request_iid and call get_merge_request. Save source_branch.
+            2. Read get_file_path("component-patch-plan.json") with ref=source_branch.
+            3. Build:
+               {
+                 "generated_at": "...",
+                 "mr_iid": <iid>,
+                 "source_branch": "<source_branch>",
+                 "summary": <copy patch-plan summary>,
+                 "fixes": <copy patch_sets>
+               }
+            4. Commit get_file_path("figma-fix-spec.json") on source_branch.
+               Use list_repository_tree(path="demo", ref=source_branch) first.
+               If the file exists use "update", else "create".
+            5. Post an MR comment with:
+               - title "Design System Migration Preview"
+               - target design system
+               - table of detected elements and planned patch properties
+               - confidence badges for high/medium/low
+               - summary counts
+               - plugin instruction to open Apply Fixes
+               If there are no patches, post:
+               "✅ No property patches were needed. The exported design already matches the target design system closely enough."
 
-          Step 3: Build the Figma Fix Spec — grouped by node (pass patch_sets through directly):
-          {
-            "generated_at": "<ISO timestamp>",
-            "mr_iid": <merge_request_iid>,
-            "source_branch": "<source_branch>",
-            "summary": "<copy summary from patch plan>",
-            "fixes": [
-              {
-                "node_id": "...",
-                "node_name": "...",
-                "target_component_id": "<string|null>",
-                "target_component_name": "...",
-                "confidence": "high|medium|low",
-                "patches": [
-                  {
-                    "target_node_id": "...",
-                    "target_node_name": "...",
-                    "target_role": "root|text|icon",
-                    "property": "...",
-                    "old_value": "<any>",
-                    "new_value": "<any>",
-                    "severity": "warning|error",
-                    "reason": "..."
-                  }
-                ]
-              }
-            ]
-          }
-
-          Include ALL patch_sets including medium/low-confidence ones.
-          Low-confidence entries will be visually flagged in the plugin.
-
-          Step 4: Commit the fix spec:
-            First call list_repository_tree with path="demo" and ref=source_branch
-            to determine whether get_file_path("figma-fix-spec.json") already exists.
-            If the file exists, the commit action MUST be "update".
-            If the file does not exist, the commit action MUST be "create".
-            create_commit with branch=source_branch,
-            commit_message: "chore: figma fix spec [skip ci]"
-            actions:
-              - action: "<update|create based on the existence check above>"
-                file_path: get_file_path("figma-fix-spec.json")
-                content: <JSON string from step 3>
-
-          Step 5: Post the MR comment using create_merge_request_note.
-            Format exactly as shown below.
-
-          ── MR COMMENT FORMAT ───────────────────────────────────────────────────
-
-          ## 🧩 Design System Migration Preview
-
-          **Target design system:** <design_system_name from component patch plan>
-
-          ### Detected Elements
-
-          | # | Element | → DS Component | Planned Patches | Confidence |
-          |---|---------|----------------|-----------------|------------|
-          | 1 | `Section 4` | `Bottom App Bar` | `height`, `fills`, `fontSize` | 🟢 High |
-          | 2 | `Rectangle 4` | `List Item` | `fills`, `padding.left` | 🟡 Medium |
-          | 3 | `Frame 10` | `Filled Icon Button` | `cornerRadius`, `width`, `height` | 🔴 Low |
-
-          Confidence key: 🟢 High · 🟡 Medium · 🔴 Low
-
-          ---
-          **Summary:** N migrations seen · N components matched · N components missing · **N patches planned**
-
-          > *Each migration updates the existing nodes with target design-system properties — colours, spacing, sizing, and layout shift toward the target system without requiring a library-component swap.*
-
-          ---
-          🔧 **N property patches ready.** Open the Figma plugin → **Apply Fixes** tab to preview and apply.
-
-          If there is nothing to migrate, post:
-          "✅ No property patches were needed. The exported design already matches the target design system closely enough."
-          In your final answer, include these exact debug lines:
+          Include all patch_sets, including medium and low confidence.
+          Final answer must include:
             save_folder:demo
             output_path:<computed path>
         user: |
