@@ -214,9 +214,9 @@ definition:
 
           RULE: Navigation Bar
             Trigger: node.type === "FRAME" AND height between 56–96 AND width ≥ 300
-            AND (structural_summary.has_icon_child === true OR child_count ≥ 3)
-            AND (structural_summary.has_text_child === true)
-            OR: name lowercased contains "nav", "tab bar", "navigation", "section 4"
+            OR (structural_summary.has_icon_child === true OR child_count ≥ 3)
+            OR (structural_summary.has_text_child === true)
+            OR: name lowercased contains "nav", "tab bar", "navigation"
             → semantic_type: "Navigation Bar"
             → Rationale: full-width bar at bottom with icon+label destinations
 

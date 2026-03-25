@@ -1,0 +1,247 @@
+{
+  "generated_at": "2026-03-25T11:23:00.000Z",
+  "target_design_system": "Material Design 3",
+  "summary": {
+    "total_nodes_scanned": 15,
+    "existing_instances": 2,
+    "raw_shapes_inferred": 4,
+    "elements_to_migrate": 6
+  },
+  "migrations": [
+    {
+      "node_id": "1:383",
+      "node_name": "Frame 2",
+      "node_type": "FRAME",
+      "case": "B",
+      "semantic_type": "Card",
+      "inference_reason": "FRAME with cornerRadius 0 (but contains structured content: image + text + button), width 197, height 258, has text children and image child. This is a product card pattern with image, title, price, and action button.",
+      "source_component": null,
+      "target_mode": "component",
+      "target_component_id": "md.comp.filled-card",
+      "target_component_name": "Filled Card",
+      "inferred_tokens": [],
+      "confidence": "medium",
+      "current_properties": {
+        "fills": "#ffffff",
+        "strokes": null,
+        "cornerRadius": 0,
+        "width": 197,
+        "height": 258,
+        "fontSize": 17,
+        "itemSpacing": 11,
+        "padding": {
+          "top": 16,
+          "right": 13,
+          "bottom": 16,
+          "left": 13
+        }
+      },
+      "child_text_node_id": "1:387",
+      "child_icon_node_id": null
+    },
+    {
+      "node_id": "1:384",
+      "node_name": "image 1",
+      "node_type": "RECTANGLE",
+      "case": "B",
+      "semantic_type": "Image Container",
+      "inference_reason": "RECTANGLE with IMAGE fill, width 171, height 167. This is an image container within a card component.",
+      "source_component": null,
+      "target_mode": "token",
+      "target_component_id": null,
+      "target_component_name": "Image Container",
+      "inferred_tokens": [
+        {
+          "property": "cornerRadius",
+          "token_name": "container-shape",
+          "current_value": 0,
+          "suggested_value": "12px",
+          "confidence": "medium"
+        }
+      ],
+      "confidence": "high",
+      "current_properties": {
+        "fills": null,
+        "strokes": null,
+        "cornerRadius": 0,
+        "width": 171,
+        "height": 167,
+        "fontSize": null,
+        "itemSpacing": null,
+        "padding": null
+      },
+      "child_text_node_id": null,
+      "child_icon_node_id": null
+    },
+    {
+      "node_id": "1:385",
+      "node_name": "Frame 4",
+      "node_type": "FRAME",
+      "case": "B",
+      "semantic_type": "Card Content Row",
+      "inference_reason": "FRAME with horizontal layout, width 171, height 48, contains text labels and button. This is a horizontal content row within a card.",
+      "source_component": null,
+      "target_mode": "token",
+      "target_component_id": null,
+      "target_component_name": "Card Content Row",
+      "inferred_tokens": [],
+      "confidence": "medium",
+      "current_properties": {
+        "fills": null,
+        "strokes": null,
+        "cornerRadius": 0,
+        "width": 171,
+        "height": 48,
+        "fontSize": 17,
+        "itemSpacing": 11,
+        "padding": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "child_text_node_id": "1:387",
+      "child_icon_node_id": null
+    },
+    {
+      "node_id": "1:386",
+      "node_name": "Frame 1",
+      "node_type": "FRAME",
+      "case": "B",
+      "semantic_type": "Text Label Group",
+      "inference_reason": "FRAME with vertical layout, width 55, height 48, contains two text children (title and price). This is a text label grouping.",
+      "source_component": null,
+      "target_mode": "token",
+      "target_component_id": null,
+      "target_component_name": "Text Label Group",
+      "inferred_tokens": [],
+      "confidence": "high",
+      "current_properties": {
+        "fills": null,
+        "strokes": null,
+        "cornerRadius": 0,
+        "width": 55,
+        "height": 48,
+        "fontSize": 17,
+        "itemSpacing": 4,
+        "padding": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "child_text_node_id": "1:387",
+      "child_icon_node_id": null
+    },
+    {
+      "node_id": "1:389",
+      "node_name": "Button - Liquid Glass - Text",
+      "node_type": "FRAME",
+      "case": "B",
+      "semantic_type": "Button",
+      "inference_reason": "FRAME with name containing 'Button', cornerRadius 1000 (pill shape), width 51, height 48, has text child '+'. This is a custom-styled button with glass effect.",
+      "source_component": null,
+      "target_mode": "component",
+      "target_component_id": "md.comp.filled-icon-button",
+      "target_component_name": "Filled Icon Button",
+      "inferred_tokens": [],
+      "confidence": "high",
+      "current_properties": {
+        "fills": null,
+        "strokes": null,
+        "cornerRadius": 1000,
+        "width": 51,
+        "height": 48,
+        "fontSize": 17,
+        "itemSpacing": 4,
+        "padding": {
+          "top": 6,
+          "right": 20,
+          "bottom": 6,
+          "left": 20
+        }
+      },
+      "child_text_node_id": "I1:391;5522:11829",
+      "child_icon_node_id": null
+    },
+    {
+      "node_id": "1:390",
+      "node_name": "BG",
+      "node_type": "INSTANCE",
+      "case": "A",
+      "semantic_type": "Background Component Instance",
+      "inference_reason": "INSTANCE with mainComponentName 'Mode=Light, State=Default'. This is already a component instance from a library, used as background/container.",
+      "source_component": "Mode=Light, State=Default",
+      "target_mode": "component",
+      "target_component_id": "md.comp.filled-icon-button",
+      "target_component_name": "Filled Icon Button",
+      "inferred_tokens": [],
+      "confidence": "medium",
+      "current_properties": {
+        "fills": null,
+        "strokes": null,
+        "cornerRadius": 0,
+        "width": 51,
+        "height": 48,
+        "fontSize": null,
+        "itemSpacing": 0,
+        "padding": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "child_text_node_id": null,
+      "child_icon_node_id": null
+    },
+    {
+      "node_id": "1:391",
+      "node_name": "Text",
+      "node_type": "INSTANCE",
+      "case": "A",
+      "semantic_type": "Text Component Instance",
+      "inference_reason": "INSTANCE with mainComponentName 'Mode=Light, State=Default'. This is already a component instance from a library, used for text/label.",
+      "source_component": "Mode=Light, State=Default",
+      "target_mode": "token",
+      "target_component_id": null,
+      "target_component_name": "Text Component Instance",
+      "inferred_tokens": [
+        {
+          "property": "textColor",
+          "token_name": "label-text-color",
+          "current_value": "#1a1a1a",
+          "suggested_value": "#1d1b20",
+          "confidence": "high"
+        },
+        {
+          "property": "fontSize",
+          "token_name": "label-text-size",
+          "current_value": "17px",
+          "suggested_value": "0.875rem",
+          "confidence": "high"
+        }
+      ],
+      "confidence": "high",
+      "current_properties": {
+        "fills": null,
+        "strokes": null,
+        "cornerRadius": 100,
+        "width": 11,
+        "height": 36,
+        "fontSize": 17,
+        "itemSpacing": 0,
+        "padding": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "child_text_node_id": "I1:391;5522:11829",
+      "child_icon_node_id": null
+    }
+  ]
+}
