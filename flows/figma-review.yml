@@ -233,6 +233,10 @@ definition:
             AND node is at the TOP of its parent (low y value relative to siblings)
             OR: name lowercased contains "header", "top bar", "app bar", "section 1", "section 2", "section 3"
             → semantic_type: "Top App Bar"
+            Trigger: if node.type === rectangle AND name lowercased contains "header", "app", "bar" 
+            AND height between 70-100 AND width ≥ 400
+            OR it has child with name containing "hamburger" or "menu" 
+            → semantic_type: "Top App Bar" or "XR App Bar"
 
           RULE: Button
             Trigger: node.type === "FRAME" AND height between 32–56 AND width between 64–240
