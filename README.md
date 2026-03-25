@@ -1,4 +1,4 @@
-# PROJECT_NAME_PLACEHOLDER
+# PixelPipeline
 
 Bring GitLab CI/CD to semantic design review and design system auto-alignment.
 

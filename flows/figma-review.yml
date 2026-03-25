@@ -35,6 +35,9 @@ definition:
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
+        - on_tool_execution_failure
+        - on_agent_start
+        - on_agent_error
 
     - name: "component_classifier"
       type: AgentComponent
@@ -50,6 +53,9 @@ definition:
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
+        - on_tool_execution_failure
+        - on_agent_start
+        - on_agent_error
 
     - name: "component_patch_planner"
       type: AgentComponent
@@ -65,6 +71,9 @@ definition:
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
+        - on_tool_execution_failure
+        - on_agent_start
+        - on_agent_error
 
     - name: "migration_writer"
       type: AgentComponent
@@ -79,6 +88,10 @@ definition:
         - create_merge_request_note
       ui_log_events:
         - on_agent_final_answer
+        - on_tool_execution_success
+        - on_tool_execution_failure
+        - on_agent_start
+        - on_agent_error
 
   routers:
     - from: "intake"
@@ -118,15 +131,9 @@ definition:
             "⏳ Design system migration analysis started…"
 
           Step 5: Output below, with no markdown fence:
-            {
-                "status": "started",
-                "source_branch": "<source_branch>",
-                "save_folder": "<save_folder>",
-                "debug_info": {
-                  "debug_output_path": "...",
-                  "actual_output_path": "demo/component-migration-plan.json"
-                }
-            }
+            - "status": "started"
+            - "source_branch": "<source_branch>"
+            - "save_folder": "<save_folder>"
 
           Do NOT ask the user for anything.
         user: |
@@ -143,7 +150,7 @@ definition:
     #    determines:
     #      (a) What semantic component type this node IS
     #      (b) Which component in the target DS best matches it
-    #    Then writes demo/component-migration-plan.json.
+    #    Then writes {save_folder}/component-migration-plan.json.
     # ──────────────────────────────────────────────────────────────────────────
     - prompt_id: "component_classifier_prompt"
       name: "Component Classifier"
@@ -303,15 +310,15 @@ definition:
             Parse save_folder from the goal text by finding `<SAVE_FOLDER><value>`.
             Use `<value>` exactly, or "" if the marker is missing.
             Build this debug path mentally:
-              - debug_output_path = save_folder ? save_folder + "/component-migration-plan.json" : "component-migration-plan.json"
-            Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
+              def get_file_path(filename):
+                  return save_folder + "/" + filename
 
           Step 2: Read ds-catalog.json:
-            Call get_repository_file (project_id, "demo/ds-catalog.json", ref=source_branch).
+            Call get_repository_file (project_id, get_file_path("ds-catalog.json"), ref=source_branch).
             Base64-decode. This gives you the available target-DS components and tokens.
 
           Step 3: Find and read the Figma export:
-            Call list_repository_tree (project_id, ref=source_branch, path="demo").
+            Call list_repository_tree (project_id, ref=source_branch, path=save_folder).
             From the returned files, find the newest file whose basename matches
             "figma-export-*.json", then call get_repository_file for that file path.
             Base64-decode. Read the "nodes" array.
@@ -349,10 +356,10 @@ definition:
               commit_message: "chore: component migration plan [skip ci]"
               actions:
                 - action: "create"
-                  file_path: "demo/component-migration-plan.json"
+                  file_path: get_file_path("component-migration-plan.json")
                   content: <JSON string>
 
-          component-migration-plan.json must match this schema:
+          The JSON content must match this schema:
           {
             "generated_at": "<ISO timestamp>",
             "target_design_system": "<design_system_name from ds-catalog>",
@@ -400,8 +407,9 @@ definition:
           Be exhaustive. Check EVERY node. Leave no untreated raw shapes.
           In your final answer, include these exact debug lines:
             save_folder:<value parsed from goal>
-            debug_output_path:<computed path>
-            actual_output_path:demo/component-migration-plan.json
+            ds-catalog.json full path:<the exact file path you read from the repo>
+            figma export file path:<the exact file path you read from the repo>
+            commit file path:<computed path>
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
@@ -425,7 +433,7 @@ definition:
           Convert component migration recommendations into conservative
           property-level Figma patches grouped by node.
 
-          You have everything you need in two files:
+          You have everything you need in two files (you will be given the save_folder path to read these from the repository):
             - {save_folder}/component-migration-plan.json
               (has node IDs, current_properties,
               child_text_node_id, child_icon_node_id, target_component_id, target_mode,
@@ -487,14 +495,14 @@ definition:
             Note source_branch.
             Parse save_folder from the goal text by finding `<SAVE_FOLDER><value>`.
             Use `<value>` exactly, or "" if the marker is missing.
-            Build this debug path mentally:
-              - debug_output_path = save_folder ? save_folder + "/component-patch-plan.json" : "component-patch-plan.json"
-            Actual repository reads and writes in this workflow MUST use the fixed demo paths below.
+            Build this path mentally:
+              def get_file_path(filename):
+                  return save_folder + "/" + filename
 
-          Step 2: Read "demo/component-migration-plan.json".
+          Step 2: Read get_file_path("component-migration-plan.json").
             Base64-decode and read the migrations array.
 
-          Step 3: Read "demo/ds-catalog.json".
+          Step 3: Read get_file_path("ds-catalog.json").
             Base64-decode and read the components array and tokens array.
 
           Step 4: For each migration:
@@ -519,7 +527,7 @@ definition:
                 file_path: "demo/component-patch-plan.json"
                 content: <JSON string>
 
-          Output JSON must match this schema:
+          The commit JSON must match this schema:
           {
             "generated_at": "<ISO timestamp>",
             "target_design_system": "<design_system_name>",
@@ -552,10 +560,10 @@ definition:
             ]
           }
           In your final answer, include these exact debug lines:
-            Input file: {save_folder}/component-migration-plan.json
+            component-migration-plan.json:<the exact file path you read from the repo>
+            ds-catalog.json:<the exact file path you read from the repo> 
             save_folder:<value parsed from goal>
-            debug_output_path:<computed path>
-            actual_output_path:demo/component-patch-plan.json
+            commit file path:<computed path>
         user: |
           Project ID: {{project_id}}
           Goal: {{goal}}
