@@ -35,9 +35,7 @@ definition:
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
-        - on_tool_execution_failure
-        - on_agent_start
-        - on_agent_error
+        - on_tool_execution_failed
 
     - name: "component_classifier"
       type: AgentComponent
@@ -53,9 +51,7 @@ definition:
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
-        - on_tool_execution_failure
-        - on_agent_start
-        - on_agent_error
+        - on_tool_execution_failed
 
     - name: "component_patch_planner"
       type: AgentComponent
@@ -71,9 +67,7 @@ definition:
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
-        - on_tool_execution_failure
-        - on_agent_start
-        - on_agent_error
+        - on_tool_execution_failed
 
     - name: "migration_writer"
       type: AgentComponent
@@ -89,9 +83,7 @@ definition:
       ui_log_events:
         - on_agent_final_answer
         - on_tool_execution_success
-        - on_tool_execution_failure
-        - on_agent_start
-        - on_agent_error
+        - on_tool_execution_failed
 
   routers:
     - from: "intake"
