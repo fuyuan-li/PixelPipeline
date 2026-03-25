@@ -77,6 +77,7 @@ definition:
         - "context:project_id"
       toolset:
         - get_merge_request
+        - list_repository_tree
         - get_repository_file
         - create_commit
         - create_merge_request_note
@@ -115,9 +116,8 @@ definition:
           Step 2: Call get_merge_request (project_id, merge_request_iid).
             Confirm the MR exists. Note source_branch and merge request description.
 
-          Step 3: Resolve save_folder for debug purposes:
-            find `<SAVE_FOLDER><value>` in the goal text,
-            and use `<value>` exactly, or "" if the marker is missing.
+          Step 3: Use the fixed output folder `demo`.
+            Ignore any `<SAVE_FOLDER>` marker in the goal text.
 
           Step 4: Call create_merge_request_note with body:
             "⏳ Design system migration analysis started…"
@@ -125,7 +125,7 @@ definition:
           Step 5: Output below, with no markdown fence:
             - "status": "started"
             - "source_branch": "<source_branch>"
-            - "save_folder": "<save_folder>"
+            - "save_folder": "demo"
 
           Do NOT ask the user for anything.
         user: |
@@ -142,7 +142,7 @@ definition:
     #    determines:
     #      (a) What semantic component type this node IS
     #      (b) Which component in the target DS best matches it
-    #    Then writes {save_folder}/component-migration-plan.json.
+    #    Then writes demo/component-migration-plan.json.
     # ──────────────────────────────────────────────────────────────────────────
     - prompt_id: "component_classifier_prompt"
       name: "Component Classifier"
@@ -399,11 +399,11 @@ definition:
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
             Note source_branch.
-            Parse save_folder from the goal text by finding `<SAVE_FOLDER><value>`.
-            Use `<value>` exactly, or "" if the marker is missing.
+            Use the fixed output folder `demo`.
+            Ignore any `<SAVE_FOLDER>` marker in the goal text.
             Build this debug path mentally:
               def get_file_path(filename):
-                  return save_folder + "/" + filename
+                  return "demo/" + filename
 
           Step 2: Read ds-catalog.json:
             Call get_repository_file (project_id, get_file_path("cache/ds-catalog.json"), ref=source_branch).
@@ -436,13 +436,17 @@ definition:
             Do NOT skip this step.
             Do NOT stop after analysis only.
             As soon as the analysis is complete and the JSON payload is ready, immediately call create_commit.
+            Before calling create_commit, call list_repository_tree with path="demo" and ref=source_branch
+            to see whether get_file_path("component-migration-plan.json") already exists.
+            If the file exists, the commit action MUST be "update".
+            If the file does not exist, the commit action MUST be "create".
             The JSON must follow the exact schema shown below.
             If you hit an error while building the JSON or while committing, first output/print the JSON as it is, and then print the error message, lastly explain the error in the content as best you can.
             Call create_commit:
               branch: source_branch
               commit_message: "chore: component migration plan [skip ci]"
               actions:
-                - action: "create"
+                - action: "<update|create based on the existence check above>"
                   file_path: get_file_path("component-migration-plan.json")
                   content: <JSON string>
 
@@ -493,7 +497,7 @@ definition:
 
           Be exhaustive. Check EVERY node. Leave no untreated raw shapes.
           In your final answer, include these exact debug lines:
-            save_folder:<value parsed from goal>
+            save_folder:demo
             debug_output_path:<computed path>
             full ds_catalog_path:<the exact file path you read from the repo>
             full export_dir:<the exact directory path you export to>
@@ -521,12 +525,12 @@ definition:
           Convert component migration recommendations into conservative
           property-level Figma patches grouped by node.
 
-          You have everything you need in two files (you will be given the save_folder path to read these from the repository):
-            - {save_folder}/component-migration-plan.json
+          You have everything you need in two files under the fixed demo folder:
+            - demo/component-migration-plan.json
               (has node IDs, current_properties,
               child_text_node_id, child_icon_node_id, target_component_id, target_mode,
               inferred_tokens)
-            - {save_folder}/cache/ds-catalog.json
+            - demo/cache/ds-catalog.json
               (has DS token specs per component and token list)
 
           Do NOT read the Figma export. All current property values are already
@@ -581,16 +585,18 @@ definition:
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
             Note source_branch.
-            Parse save_folder from the goal text by finding `<SAVE_FOLDER><value>`.
-            Use `<value>` exactly, or "" if the marker is missing.
+            Use the fixed output folder `demo`.
+            Ignore any `<SAVE_FOLDER>` marker in the goal text.
             Build this path mentally:
               def get_file_path(filename):
-                  return save_folder + "/" + filename
+                  return "demo/" + filename
 
           Step 2: Read get_file_path("component-migration-plan.json").
+            Call get_repository_file (project_id, get_file_path("component-migration-plan.json"), ref=source_branch).
             Base64-decode and read the migrations array.
 
           Step 3: Read get_file_path("cache/ds-catalog.json").
+            Call get_repository_file (project_id, get_file_path("cache/ds-catalog.json"), ref=source_branch).
             Base64-decode and read the components array and tokens array.
 
           Step 4: For each migration:
@@ -608,10 +614,14 @@ definition:
               - skip layout properties such as width, height, padding, itemSpacing
 
           Step 5: Commit get_file_path("component-patch-plan.json"):
+            First call list_repository_tree with path="demo" and ref=source_branch
+            to determine whether get_file_path("component-patch-plan.json") already exists.
+            If the file exists, the commit action MUST be "update".
+            If the file does not exist, the commit action MUST be "create".
             create_commit with branch=source_branch,
             commit_message: "chore: component patch plan [skip ci]"
             actions:
-              - action: "create"
+              - action: "<update|create based on the existence check above>"
                 file_path: get_file_path("component-patch-plan.json")
                 content: <JSON string>
 
@@ -650,7 +660,7 @@ definition:
           In your final answer, include these exact debug lines:
             component-migration-plan.json:<the exact file path you read from the repo>
             ds-catalog.json:<the exact file path you read from the repo> 
-            save_folder:<value parsed from goal>
+            save_folder:demo
             commit file path:<computed path>
         user: |
           Project ID: {{project_id}}
@@ -673,12 +683,15 @@ definition:
 
           Step 1: Parse merge_request_iid from goal. Call get_merge_request.
             Note source_branch.
-            Parse save_folder from the goal text by finding `<SAVE_FOLDER><value>`.
-            Use `<value>` exactly, or "" if the marker is missing.
+            Use the fixed output folder `demo`.
+            Ignore any `<SAVE_FOLDER>` marker in the goal text.
             Build this debug path mentally:
-              - debug_output_path = save_folder ? save_folder + "/figma-fix-spec.json" : "figma-fix-spec.json"
+              def get_file_path(filename):
+                  return "demo/" + filename
+              debug_output_path = get_file_path("figma-fix-spec.json")
 
           Step 2: Call get_repository_file for get_file_path("component-patch-plan.json").
+            Call get_repository_file (project_id, get_file_path("component-patch-plan.json"), ref=source_branch).
             Base64-decode. Read the patch_sets array and summary.
 
           Step 3: Build the Figma Fix Spec — grouped by node (pass patch_sets through directly):
@@ -714,10 +727,14 @@ definition:
           Low-confidence entries will be visually flagged in the plugin.
 
           Step 4: Commit the fix spec:
+            First call list_repository_tree with path="demo" and ref=source_branch
+            to determine whether get_file_path("figma-fix-spec.json") already exists.
+            If the file exists, the commit action MUST be "update".
+            If the file does not exist, the commit action MUST be "create".
             create_commit with branch=source_branch,
             commit_message: "chore: figma fix spec [skip ci]"
             actions:
-              - action: "create"
+              - action: "<update|create based on the existence check above>"
                 file_path: get_file_path("figma-fix-spec.json")
                 content: <JSON string from step 3>
 
@@ -751,7 +768,7 @@ definition:
           If there is nothing to migrate, post:
           "✅ No property patches were needed. The exported design already matches the target design system closely enough."
           In your final answer, include these exact debug lines:
-            save_folder:<value parsed from goal>
+            save_folder:demo
             output_path:<computed path>
         user: |
           Project ID: {{project_id}}
